@@ -6,6 +6,11 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		B31FC35B307D28960023A0ED /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B31FC35A307D28960023A0ED /* Metal.framework */; };
+		B31FC35D307D28A00023A0ED /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B31FC35C307D28A00023A0ED /* Foundation.framework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXCopyFilesBuildPhase section */
 		B31FC2F2307D042A0023A0ED /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
@@ -19,6 +24,8 @@
 
 /* Begin PBXFileReference section */
 		B31FC2F4307D042A0023A0ED /* RACORNUMALab */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = RACORNUMALab; sourceTree = BUILT_PRODUCTS_DIR; };
+		B31FC35A307D28960023A0ED /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		B31FC35C307D28A00023A0ED /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -46,6 +53,8 @@
 		B31FC2F1307D042A0023A0ED /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				B31FC35B307D28960023A0ED /* Metal.framework in Frameworks */,
+				B31FC35D307D28A00023A0ED /* Foundation.framework in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -55,6 +64,7 @@
 			isa = PBXGroup;
 			children = (
 				B31FC2F6307D042A0023A0ED /* RACORNUMALab */,
+				B31FC359307D28960023A0ED /* Frameworks */,
 				B31FC2F5307D042A0023A0ED /* Products */,
 			);
 			sourceTree = "<group>";
@@ -65,6 +75,15 @@
 				B31FC2F4307D042A0023A0ED /* RACORNUMALab */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		B31FC359307D28960023A0ED /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B31FC35C307D28A00023A0ED /* Foundation.framework */,
+				B31FC35A307D28960023A0ED /* Metal.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */

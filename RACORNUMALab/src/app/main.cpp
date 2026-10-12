@@ -3,628 +3,386 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar la ablación de bridge_budget_ratio de RACORN-1.
+//  Ejecutar el primer flujo compute real CPU↔GPU utilizando memoria
+//  unificada mediante MTLStorageModeShared.
 //
 //  Gate:
-//  G4D — Sweep de bridge_budget_ratio.
+//  G-UMA1 — Shared Buffer Compute Probe.
 //
-//  Ejemplo:
+//  Flujo validado:
 //
-//      RACORNUMALab --modulus 200 --residues 8
+//      CPU inicializa
+//             ↓
+//      MTLBuffer Shared
+//             ↓
+//      GPU Metal
+//             ↓
+//      mismo MTLBuffer Shared
+//             ↓
+//      CPU verifica
 //
-//  Con:
+//  Condición PASS:
+//  - Metal disponible.
+//  - Memoria unificada.
+//  - Biblioteca Metal disponible.
+//  - Kernel encontrado.
+//  - Pipeline creado.
+//  - Command Queue creada.
+//  - Buffer Shared válido.
+//  - Command Buffer completado.
+//  - Cero diferencias respecto del oráculo CPU.
 //
-//      modulus = 200
-//      threshold = 1
+//  RACORN:
+//  Permanece completamente intacto.
 //
-//  la selectividad nominal es:
-//
-//      0.5 %
-//
-//  El programa evalúa internamente:
-//
-//      BR = 0.25
-//      BR = 0.50
-//      BR = 0.75
-//      BR = 1.00
-//
-//  sobre el mismo índice, consultas y realizaciones del filtro.
+//  Importante:
+//  Este Gate no mide rendimiento.
 //
 
 #include "core/BuildInfo.hpp"
-#include "filtered/BridgeBudgetSweep.hpp"
 #include "integration/RacornProbe.hpp"
+#include "platform/apple/SharedBufferProbe.hpp"
 #include "platform/apple/SystemInfo.hpp"
 
-#include <charconv>
-#include <cstddef>
+#include <cstdint>
 #include <iomanip>
 #include <iostream>
-#include <string_view>
+#include <limits>
 
 namespace {
 
-struct RunConfiguration final {
-
-    std::size_t modulus =
-        200;
-
-    std::size_t threshold =
-        1;
-
-    std::size_t residues =
-        8;
-
-    bool valid =
-        true;
-
-    bool help_requested =
-        false;
-};
-
-bool parse_size(
-    std::string_view text,
-    std::size_t& output
+double bytes_to_mib(
+    std::uint64_t bytes
 ) noexcept {
-
-    if (
-        text.empty()
-    ) {
-
-        return false;
-    }
-
-    const auto result =
-        std::from_chars(
-            text.data(),
-            text.data() +
-                text.size(),
-            output
-        );
 
     return
-        result.ec ==
-            std::errc{} &&
-        result.ptr ==
-            text.data() +
-            text.size();
+        static_cast<double>(
+            bytes
+        ) /
+        (
+            1024.0 *
+            1024.0
+        );
 }
 
-RunConfiguration parse_arguments(
-    int argc,
-    char* argv[]
+char const* yes_no(
+    bool value
 ) noexcept {
 
-    RunConfiguration configuration;
-
-    int index =
-        1;
-
-    while (
-        index <
-        argc
-    ) {
-
-        const std::string_view option(
-            argv[index]
-        );
-
-        if (
-            option == "--help" ||
-            option == "-h"
-        ) {
-
-            configuration.help_requested =
-                true;
-
-            return configuration;
-        }
-
-        if (
-            option ==
-                "--modulus" &&
-            index + 1 <
-                argc
-        ) {
-
-            if (
-                !parse_size(
-                    argv[index + 1],
-                    configuration.modulus
-                )
-            ) {
-
-                configuration.valid =
-                    false;
-
-                return configuration;
-            }
-
-            index +=
-                2;
-
-            continue;
-        }
-
-        if (
-            option ==
-                "--threshold" &&
-            index + 1 <
-                argc
-        ) {
-
-            if (
-                !parse_size(
-                    argv[index + 1],
-                    configuration.threshold
-                )
-            ) {
-
-                configuration.valid =
-                    false;
-
-                return configuration;
-            }
-
-            index +=
-                2;
-
-            continue;
-        }
-
-        if (
-            option ==
-                "--residues" &&
-            index + 1 <
-                argc
-        ) {
-
-            if (
-                !parse_size(
-                    argv[index + 1],
-                    configuration.residues
-                )
-            ) {
-
-                configuration.valid =
-                    false;
-
-                return configuration;
-            }
-
-            index +=
-                2;
-
-            continue;
-        }
-
-        configuration.valid =
-            false;
-
-        return configuration;
-    }
-
-    if (
-        configuration.modulus ==
-            0 ||
-        configuration.threshold ==
-            0 ||
-        configuration.threshold >
-            configuration.modulus ||
-        configuration.residues ==
-            0 ||
-        configuration.residues >
-            256
-    ) {
-
-        configuration.valid =
-            false;
-    }
-
-    return configuration;
-}
-
-void print_usage() {
-
-    std::cout
-        << "Uso:\n"
-        << "  RACORNUMALab "
-        << "--modulus <M> "
-        << "[--threshold <T>] "
-        << "[--residues <R>]\n\n"
-
-        << "Ejemplo:\n"
-        << "  RACORNUMALab "
-        << "--modulus 200 "
-        << "--residues 8\n";
-}
-
-void print_baseline(
-    racorn_uma::filtered::
-        BridgeModeStats const& mode,
-    std::size_t k
-) {
-
-    std::cout
-        << '\n'
-        << '['
-        << mode.name
-        << "]\n";
-
-    std::cout
-        << "Recall@"
-        << k
-        << " global      : "
-        << std::fixed
-        << std::setprecision(4)
-        << mode.mean_recall_at_k
-        << '\n';
-
-    std::cout
-        << "Recall std residuos : "
-        << std::fixed
-        << std::setprecision(6)
-        << mode.realization_recall_stddev
-        << '\n';
-
-    std::cout
-        << "Recall min residuo  : "
-        << std::fixed
-        << std::setprecision(4)
-        << mode.min_realization_recall
-        << '\n';
-
-    std::cout
-        << "Recall max residuo  : "
-        << std::fixed
-        << std::setprecision(4)
-        << mode.max_realization_recall
-        << '\n';
-
-    std::cout
-        << "Distancias medias   : "
-        << std::fixed
-        << std::setprecision(2)
-        << mode.mean_computed_distances
-        << '\n';
-
-    std::cout
-        << "Predicados medios   : "
-        << std::fixed
-        << std::setprecision(2)
-        << mode.mean_predicate_evaluations
-        << '\n';
-}
-
-void print_racorn_table(
-    racorn_uma::filtered::
-        BridgeBudgetResult const& result
-) {
-
-    std::cout
-        << "\n[RACORN-1 - Bridge budget]\n\n";
-
-    std::cout
-        << std::left
-        << std::setw(8)
-        << "BR"
-
-        << std::right
-        << std::setw(12)
-        << "Recall"
-
-        << std::setw(12)
-        << "Std"
-
-        << std::setw(12)
-        << "Min"
-
-        << std::setw(12)
-        << "Max"
-
-        << std::setw(14)
-        << "Dist"
-
-        << std::setw(14)
-        << "Visit"
-
-        << std::setw(14)
-        << "Pred"
-
-        << std::setw(14)
-        << "Fallback"
-
-        << std::setw(14)
-        << "FB queries"
-
-        << '\n';
-
-    for (
-        auto const& mode :
-        result.racorn_modes
-    ) {
-
-        std::cout
-            << std::left
-            << std::setw(8)
-            << std::fixed
-            << std::setprecision(2)
-            << mode.bridge_budget_ratio
-
-            << std::right
-            << std::setw(12)
-            << std::setprecision(4)
-            << mode.mean_recall_at_k
-
-            << std::setw(12)
-            << std::setprecision(5)
-            << mode.realization_recall_stddev
-
-            << std::setw(12)
-            << std::setprecision(4)
-            << mode.min_realization_recall
-
-            << std::setw(12)
-            << mode.max_realization_recall
-
-            << std::setw(14)
-            << std::setprecision(2)
-            << mode.mean_computed_distances
-
-            << std::setw(14)
-            << mode.mean_visited_members
-
-            << std::setw(14)
-            << mode.mean_predicate_evaluations
-
-            << std::setw(14)
-            << mode.mean_fallback_count
-
-            << std::setw(13)
-            << std::setprecision(1)
-            << (
-                mode.fallback_query_fraction *
-                100.0
-            )
-            << "%"
-
-            << '\n';
-    }
-}
-
-void print_efficiency(
-    racorn_uma::filtered::
-        BridgeBudgetResult const& result
-) {
-
-    std::cout
-        << "\n[Reduccion de distancias vs HNSW]\n";
-
-    for (
-        auto const& mode :
-        result.racorn_modes
-    ) {
-
-        const double ratio =
-            result.hnsw
-                .mean_computed_distances /
-            mode.mean_computed_distances;
-
-        const double reduction =
-            1.0 -
-            (
-                mode.mean_computed_distances /
-                result.hnsw
-                    .mean_computed_distances
-            );
-
-        std::cout
-            << "BR="
-            << std::fixed
-            << std::setprecision(2)
-            << mode.bridge_budget_ratio
-
-            << " -> "
-            << std::setprecision(2)
-            << ratio
-            << "x menos distancias; "
-
-            << std::setprecision(2)
-            << (
-                reduction *
-                100.0
-            )
-            << " % reduccion\n";
-    }
+    return
+        value
+            ? "SI"
+            : "NO";
 }
 
 } // namespace
 
-int main(
-    int argc,
-    char* argv[]
-) {
+int main() {
 
     using racorn_uma::core::
         BuildInfo;
-
-    using racorn_uma::filtered::
-        BridgeBudgetSweep;
 
     using racorn_uma::integration::
         RacornProbe;
 
     using racorn_uma::platform::apple::
+        SharedBufferProbe;
+
+    using racorn_uma::platform::apple::
         SystemInfo;
 
-    const RunConfiguration configuration =
-        parse_arguments(
-            argc,
-            argv
-        );
-
-    if (
-        configuration.help_requested
-    ) {
-
-        print_usage();
-
-        return 0;
-    }
-
-    if (
-        !configuration.valid
-    ) {
-
-        std::cerr
-            << "Parametros invalidos.\n\n";
-
-        print_usage();
-
-        return 2;
-    }
-
     const auto result =
-        BridgeBudgetSweep::run(
-            configuration.modulus,
-            configuration.threshold,
-            configuration.residues
-        );
+        SharedBufferProbe::run();
 
     std::cout
         << "========================================\n"
         << " RACORNUMALab\n"
-        << " Gate G4D - Bridge Budget Sweep\n"
+        << " Gate G-UMA1 - Shared Buffer Compute\n"
         << "========================================\n\n";
 
+    //
+    // Plataforma.
+    //
+
     std::cout
-        << "[Plataforma]\n"
-        << "Compilador        : "
+        << "[Plataforma]\n";
+
+    std::cout
+        << "Compilador              : "
         << BuildInfo::compiler()
-        << '\n'
-        << "Estandar C++      : "
+        << '\n';
+
+    std::cout
+        << "Estandar C++            : "
         << BuildInfo::cpp_standard()
-        << '\n'
-        << "Arquitectura      : "
+        << '\n';
+
+    std::cout
+        << "Arquitectura            : "
         << BuildInfo::architecture()
-        << '\n'
-        << "Modelo hardware   : "
+        << '\n';
+
+    std::cout
+        << "Modelo hardware         : "
         << SystemInfo::hardware_model()
         << "\n\n";
 
+    //
+    // Provenance RACORN.
+    //
+
     std::cout
-        << "[RACORN]\n"
-        << "Repositorio        : "
+        << "[RACORN congelado]\n";
+
+    std::cout
+        << "Repositorio              : "
         << RacornProbe::repository()
-        << '\n'
-        << "Version            : "
+        << '\n';
+
+    std::cout
+        << "Version                  : "
         << RacornProbe::version()
-        << '\n'
-        << "Commit             : "
+        << '\n';
+
+    std::cout
+        << "Commit                   : "
         << RacornProbe::commit()
         << "\n\n";
 
+    //
+    // Compute Metal.
+    //
+
     std::cout
-        << "[Experimento]\n"
-        << "N                  : "
-        << result.vector_count
-        << '\n'
-        << "D                  : "
-        << result.dimensions
-        << '\n'
-        << "M                  : "
-        << result.connectivity
-        << '\n'
-        << "efConstruction     : "
-        << result.ef_construction
-        << '\n'
-        << "efSearch           : "
-        << result.ef_search
-        << '\n'
-        << "Queries/residuo    : "
-        << result.query_count
-        << '\n'
-        << "k                  : "
-        << result.k
-        << '\n'
-        << "Filter modulus     : "
-        << result.filter_modulus
-        << '\n'
-        << "Filter threshold   : "
-        << result.filter_threshold
-        << '\n'
-        << "Realizaciones      : "
-        << result.realization_count
-        << '\n'
-        << "Elegibles min/max  : "
-        << result.min_eligible_count
-        << " / "
-        << result.max_eligible_count
-        << '\n'
-        << "Selectividad nominal: "
+        << "[Metal Compute]\n";
+
+    std::cout
+        << "Metal disponible         : "
+        << yes_no(
+            result.metal_available
+        )
+        << '\n';
+
+    std::cout
+        << "Dispositivo              : "
+        << result.device_name
+        << '\n';
+
+    std::cout
+        << "Memoria unificada        : "
+        << yes_no(
+            result.unified_memory
+        )
+        << '\n';
+
+    std::cout
+        << "Biblioteca Metal         : "
+        << yes_no(
+            result.library_available
+        )
+        << '\n';
+
+    std::cout
+        << "Kernel                   : "
+        << result.kernel_name
+        << '\n';
+
+    std::cout
+        << "Kernel encontrado        : "
+        << yes_no(
+            result.kernel_available
+        )
+        << '\n';
+
+    std::cout
+        << "Compute Pipeline         : "
+        << yes_no(
+            result.pipeline_available
+        )
+        << '\n';
+
+    std::cout
+        << "Command Queue            : "
+        << yes_no(
+            result.command_queue_available
+        )
+        << '\n';
+
+    std::cout
+        << "Shared Buffer            : "
+        << yes_no(
+            result.shared_buffer_available
+        )
+        << '\n';
+
+    std::cout
+        << "Command Buffer           : "
+        << yes_no(
+            result.command_buffer_available
+        )
+        << '\n';
+
+    std::cout
+        << "Compute Encoder          : "
+        << yes_no(
+            result.encoder_available
+        )
+        << '\n';
+
+    std::cout
+        << "GPU completada           : "
+        << yes_no(
+            result.command_completed
+        )
+        << "\n\n";
+
+    //
+    // Workload.
+    //
+
+    std::cout
+        << "[Workload]\n";
+
+    std::cout
+        << "Elementos                : "
+        << result.element_count
+        << '\n';
+
+    std::cout
+        << "Buffer                    : "
         << std::fixed
-        << std::setprecision(4)
-        << (
-            result.nominal_selectivity *
-            100.0
+        << std::setprecision(2)
+        << bytes_to_mib(
+            result.buffer_bytes
         )
-        << " %\n";
-
-    print_baseline(
-        result.hnsw,
-        result.k
-    );
-
-    print_baseline(
-        result.acorn,
-        result.k
-    );
-
-    print_racorn_table(
-        result
-    );
-
-    print_efficiency(
-        result
-    );
+        << " MiB\n";
 
     std::cout
-        << "\n[Validacion]\n"
-        << "Ground truth exacto : "
-        << (
-            result
-                .exact_ground_truth_complete
-                ? "OK"
-                : "FAIL"
+        << "Execution width          : "
+        << result.thread_execution_width
+        << '\n';
+
+    std::cout
+        << "Threads/group max        : "
+        << result
+            .max_total_threads_per_threadgroup
+        << '\n';
+
+    std::cout
+        << "Threads/group usados     : "
+        << result.threads_per_threadgroup
+        << '\n';
+
+    std::cout
+        << "Dispatches GPU           : 1\n";
+
+    std::cout
+        << "Sincronizaciones CPU/GPU : 1\n\n";
+
+    //
+    // Verificación.
+    //
+
+    std::cout
+        << "[Verificacion bit-exacta]\n";
+
+    std::cout
+        << "Elementos verificados    : "
+        << result.element_count
+        << '\n';
+
+    std::cout
+        << "Diferencias              : "
+        << result.mismatch_count
+        << '\n';
+
+    std::cout
+        << "Coincidencia exacta      : "
+        << yes_no(
+            result.exact_match
         )
-        << '\n'
-        << "Filtros validos     : "
-        << (
-            result.filters_valid
-                ? "SI"
-                : "NO"
-        )
-        << '\n'
-        << "Estado experimento  : "
-        << (
-            result.passed
-                ? "PASS"
-                : "FAIL"
+        << '\n';
+
+    if (
+        result.mismatch_count >
+        0 &&
+        result.first_mismatch_index !=
+            std::numeric_limits<
+                std::size_t
+            >::max()
+    ) {
+
+        std::cout
+            << "Primer mismatch indice   : "
+            << result.first_mismatch_index
+            << '\n';
+
+        std::cout
+            << "Esperado                 : 0x"
+            << std::hex
+            << std::uppercase
+            << result.first_mismatch_expected
+            << std::dec
+            << std::nouppercase
+            << '\n';
+
+        std::cout
+            << "Observado                : 0x"
+            << std::hex
+            << std::uppercase
+            << result.first_mismatch_observed
+            << std::dec
+            << std::nouppercase
+            << '\n';
+    }
+
+    if (
+        !result.metal_error.empty()
+    ) {
+
+        std::cout
+            << "\n[Error Metal]\n"
+            << result.metal_error
+            << '\n';
+    }
+
+    std::cout
+        << "\n[Invariantes]\n";
+
+    std::cout
+        << "RACORN modificado        : NO\n";
+
+    std::cout
+        << "HNSW ejecutado           : NO\n";
+
+    std::cout
+        << "Predicate Engine         : NO\n";
+
+    std::cout
+        << "Copia CPU->VRAM explicita: NO\n";
+
+    std::cout
+        << "Copia VRAM->CPU explicita: NO\n";
+
+    std::cout
+        << "Kernel GPU ejecutado     : "
+        << yes_no(
+            result.command_completed
         )
         << "\n\n";
 
     if (
-        !result.passed
+        !result.valid
     ) {
 
         std::cerr
-            << "[G4D] FAIL\n";
+            << "[G-UMA1] FAIL\n";
 
         return 1;
     }
 
     std::cout
-        << "[G4D] PASS\n";
+        << "[G-UMA1] PASS\n";
 
     return 0;
 }
