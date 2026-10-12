@@ -6,18 +6,17 @@
 //  Punto de entrada de la aplicación de terminal RACORNUMALab.
 //
 //  Gate actual:
-//  G1 — Fundación estructural y diagnóstico de plataforma.
+//  G2 — Integración reproducible del artefacto RACORN-1.
 //
-//  Responsabilidades actuales:
-//  - Verificar el entorno de compilación.
-//  - Verificar ejecución arm64.
-//  - Verificar propiedades fundamentales del Apple Silicon.
-//  - Confirmar el presupuesto físico de memoria.
-//
-//  RACORN y USEARCH todavía NO forman parte de este Gate.
+//  Responsabilidades:
+//  - Verificar plataforma Apple Silicon.
+//  - Verificar toolchain.
+//  - Verificar disponibilidad compilable de RACORN.
+//  - Exponer la procedencia exacta del artefacto científico.
 //
 
 #include "core/BuildInfo.hpp"
+#include "integration/RacornProbe.hpp"
 #include "platform/apple/SystemInfo.hpp"
 
 #include <cstdint>
@@ -39,6 +38,7 @@ double bytes_to_gib(std::uint64_t bytes) {
 int main() {
 
     using racorn_uma::core::BuildInfo;
+    using racorn_uma::integration::RacornProbe;
     using racorn_uma::platform::apple::SystemInfo;
 
     const std::uint64_t physical_memory =
@@ -47,8 +47,11 @@ int main() {
     std::cout
         << "========================================\n"
         << " RACORNUMALab\n"
-        << " Gate G1 - Diagnostico de plataforma\n"
+        << " Gate G2 - Integracion RACORN\n"
         << "========================================\n\n";
+
+    std::cout
+        << "[Plataforma]\n";
 
     std::cout
         << "Compilador        : "
@@ -61,23 +64,13 @@ int main() {
         << '\n';
 
     std::cout
-        << "Arquitectura build: "
+        << "Arquitectura      : "
         << BuildInfo::architecture()
-        << '\n';
-
-    std::cout
-        << "Modo build        : "
-        << BuildInfo::build_mode()
         << '\n';
 
     std::cout
         << "Modelo hardware   : "
         << SystemInfo::hardware_model()
-        << '\n';
-
-    std::cout
-        << "hw.machine        : "
-        << SystemInfo::machine()
         << '\n';
 
     std::cout
@@ -87,42 +80,59 @@ int main() {
 
     std::cout
         << "Memoria fisica    : "
-        << physical_memory
-        << " bytes";
+        << std::fixed
+        << std::setprecision(2)
+        << bytes_to_gib(physical_memory)
+        << " GiB\n\n";
 
-    if (physical_memory > 0) {
-        std::cout
-            << " ("
-            << std::fixed
-            << std::setprecision(2)
-            << bytes_to_gib(physical_memory)
-            << " GiB)";
-    }
+    std::cout
+        << "[RACORN]\n";
 
-    std::cout << "\n\n";
+    std::cout
+        << "Repositorio        : "
+        << RacornProbe::repository()
+        << '\n';
 
-    const bool architecture_ok =
+    std::cout
+        << "Version            : "
+        << RacornProbe::version()
+        << '\n';
+
+    std::cout
+        << "Commit             : "
+        << RacornProbe::commit()
+        << '\n';
+
+    std::cout
+        << "Headers            : "
+        << (
+            RacornProbe::headers_available()
+                ? "OK"
+                : "FAIL"
+        )
+        << "\n\n";
+
+    const bool platform_ok =
         BuildInfo::architecture() == "arm64";
 
     const bool memory_ok =
         physical_memory > 0;
 
-    const bool cpp_ok =
-        BuildInfo::cpp_standard() == "C++20" ||
-        BuildInfo::cpp_standard() == "C++23";
+    const bool racorn_ok =
+        RacornProbe::headers_available();
 
-    if (!architecture_ok ||
+    if (!platform_ok ||
         !memory_ok ||
-        !cpp_ok) {
+        !racorn_ok) {
 
         std::cerr
-            << "[G1] FAIL\n";
+            << "[G2] FAIL\n";
 
         return 1;
     }
 
     std::cout
-        << "[G1] PASS\n";
+        << "[G2] PASS\n";
 
     return 0;
 }

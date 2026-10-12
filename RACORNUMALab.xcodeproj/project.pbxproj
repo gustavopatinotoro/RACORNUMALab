@@ -21,9 +21,22 @@
 		B31FC2F4307D042A0023A0ED /* RACORNUMALab */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = RACORNUMALab; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		B31FC344307D0E900023A0ED /* Exceptions for "RACORNUMALab" folder in "RACORNUMALab" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				vendor/racorn/bench/bench_acorn.cpp,
+			);
+			target = B31FC2F3307D042A0023A0ED /* RACORNUMALab */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		B31FC2F6307D042A0023A0ED /* RACORNUMALab */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B31FC344307D0E900023A0ED /* Exceptions for "RACORNUMALab" folder in "RACORNUMALab" target */,
+			);
 			path = RACORNUMALab;
 			sourceTree = "<group>";
 		};
@@ -240,7 +253,12 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = Y65QKG27DA;
 				ENABLE_HARDENED_RUNTIME = YES;
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/RACORNUMALab/src";
+				GCC_PREPROCESSOR_DEFINITIONS = "USEARCH_USE_FP16LIB=1";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/RACORNUMALab/src",
+					"$(SRCROOT)/RACORNUMALab/vendor/racorn/fp16/include",
+					"$(SRCROOT)/RACORNUMALab/vendor/racorn/include",
+				);
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
@@ -252,7 +270,12 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = Y65QKG27DA;
 				ENABLE_HARDENED_RUNTIME = YES;
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/RACORNUMALab/src";
+				GCC_PREPROCESSOR_DEFINITIONS = "USEARCH_USE_FP16LIB=1";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/RACORNUMALab/src",
+					"$(SRCROOT)/RACORNUMALab/vendor/racorn/fp16/include",
+					"$(SRCROOT)/RACORNUMALab/vendor/racorn/include",
+				);
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
