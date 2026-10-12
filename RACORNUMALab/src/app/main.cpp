@@ -3,16 +3,16 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar un único experimento HNSW parametrizado por N.
+//  Ejecutar un experimento HNSW parametrizado por cardinalidad
+//  y dimensionalidad.
 //
 //  Gate:
-//  G3C — Escalado controlado de memoria.
+//  G3D — Descomposición de memoria.
 //
 //  Uso:
-//      RACORNUMALab --n 1000
+//      RACORNUMALab --n 16000 --d 384
 //
-//  Restricción metodológica:
-//  Cada N debe ejecutarse en un proceso independiente.
+//  Cada configuración debe ejecutarse en un proceso independiente.
 //
 
 #include "baseline/HnswBaseline.hpp"
@@ -29,13 +29,99 @@
 
 namespace {
 
-double bytes_to_gib(
-    std::uint64_t bytes
+struct RunConfig final {
+    std::size_t vector_count = 16000;
+    std::size_t dimensions = 4;
+    bool valid = true;
+};
+
+bool parse_size(
+    std::string_view text,
+    std::size_t& output
 ) {
 
+    const auto result =
+        std::from_chars(
+            text.data(),
+            text.data() + text.size(),
+            output
+        );
+
     return
-        static_cast<double>(bytes) /
-        (1024.0 * 1024.0 * 1024.0);
+        result.ec == std::errc{} &&
+        result.ptr ==
+            text.data() + text.size();
+}
+
+RunConfig parse_arguments(
+    int argc,
+    char* argv[]
+) {
+
+    RunConfig config;
+
+    int i = 1;
+
+    while (i < argc) {
+
+        const std::string_view option(
+            argv[i]
+        );
+
+        if (
+            option == "--n" &&
+            i + 1 < argc
+        ) {
+
+            if (
+                !parse_size(
+                    argv[i + 1],
+                    config.vector_count
+                )
+            ) {
+
+                config.valid = false;
+                return config;
+            }
+
+            i += 2;
+            continue;
+        }
+
+        if (
+            option == "--d" &&
+            i + 1 < argc
+        ) {
+
+            if (
+                !parse_size(
+                    argv[i + 1],
+                    config.dimensions
+                )
+            ) {
+
+                config.valid = false;
+                return config;
+            }
+
+            i += 2;
+            continue;
+        }
+
+        config.valid = false;
+        return config;
+    }
+
+    if (
+        config.vector_count < 10 ||
+        config.dimensions == 0 ||
+        config.dimensions > 4096
+    ) {
+
+        config.valid = false;
+    }
+
+    return config;
 }
 
 double bytes_to_mib(
@@ -47,56 +133,27 @@ double bytes_to_mib(
         (1024.0 * 1024.0);
 }
 
-std::size_t parse_vector_count(
-    int argc,
-    char* argv[]
+double bytes_to_gib(
+    std::uint64_t bytes
 ) {
 
-    constexpr std::size_t default_n =
-        1000;
+    return
+        static_cast<double>(bytes) /
+        (1024.0 * 1024.0 * 1024.0);
+}
 
-    if (argc == 1) {
-        return default_n;
-    }
+std::int64_t delta_bytes(
+    std::uint64_t current,
+    std::uint64_t baseline
+) {
 
-    if (argc != 3) {
-        return 0;
-    }
-
-    if (
-        std::string_view(argv[1]) !=
-        "--n"
-    ) {
-
-        return 0;
-    }
-
-    std::size_t value = 0;
-
-    const std::string_view text(
-        argv[2]
-    );
-
-    const auto result =
-        std::from_chars(
-            text.data(),
-            text.data() +
-                text.size(),
-            value
+    return
+        static_cast<std::int64_t>(
+            current
+        ) -
+        static_cast<std::int64_t>(
+            baseline
         );
-
-    if (
-        result.ec !=
-            std::errc{} ||
-        result.ptr !=
-            text.data() +
-            text.size()
-    ) {
-
-        return 0;
-    }
-
-    return value;
 }
 
 void print_keys(
@@ -129,20 +186,16 @@ void print_memory(
         ProcessMemorySnapshot const& baseline
 ) {
 
-    const std::int64_t footprint_delta =
-        static_cast<std::int64_t>(
-            snapshot.physical_footprint_bytes
-        ) -
-        static_cast<std::int64_t>(
-            baseline.physical_footprint_bytes
+    const auto rss_delta =
+        delta_bytes(
+            snapshot.resident_bytes,
+            baseline.resident_bytes
         );
 
-    const std::int64_t resident_delta =
-        static_cast<std::int64_t>(
-            snapshot.resident_bytes
-        ) -
-        static_cast<std::int64_t>(
-            baseline.resident_bytes
+    const auto footprint_delta =
+        delta_bytes(
+            snapshot.physical_footprint_bytes,
+            baseline.physical_footprint_bytes
         );
 
     std::cout
@@ -163,7 +216,7 @@ void print_memory(
         << std::setw(9)
         << (
             static_cast<double>(
-                resident_delta
+                rss_delta
             ) /
             (1024.0 * 1024.0)
         )
@@ -205,30 +258,34 @@ int main(
     using racorn_uma::platform::apple::
         SystemInfo;
 
-    const std::size_t vector_count =
-        parse_vector_count(
+    const RunConfig config =
+        parse_arguments(
             argc,
             argv
         );
 
-    if (vector_count < 10) {
+    if (!config.valid) {
 
         std::cerr
-            << "Uso: RACORNUMALab --n <N>\n"
-            << "N debe ser >= 10\n";
+            << "Uso:\n"
+            << "  RACORNUMALab --n <N> --d <D>\n\n"
+            << "Restricciones:\n"
+            << "  N >= 10\n"
+            << "  1 <= D <= 4096\n";
 
         return 2;
     }
 
     const auto result =
         HnswBaseline::run(
-            vector_count
+            config.vector_count,
+            config.dimensions
         );
 
     std::cout
         << "========================================\n"
         << " RACORNUMALab\n"
-        << " Gate G3C - Escalado HNSW\n"
+        << " Gate G3D - Dimension vs HNSW\n"
         << "========================================\n\n";
 
     std::cout
@@ -285,7 +342,14 @@ int main(
         << '\n'
         << "k                  : "
         << result.k
-        << "\n\n";
+        << '\n'
+        << "VectorStore teorico: "
+        << std::fixed
+        << std::setprecision(2)
+        << bytes_to_mib(
+            result.expected_vector_bytes
+        )
+        << " MiB\n\n";
 
     print_keys(
         "Exact keys        ",
@@ -339,18 +403,69 @@ int main(
         result.memory_start
     );
 
-    std::cout << '\n';
+    const std::int64_t observed_vector_bytes =
+        delta_bytes(
+            result.memory_after_vectors
+                .physical_footprint_bytes,
+            result.memory_start
+                .physical_footprint_bytes
+        );
+
+    const std::int64_t index_over_vectors_bytes =
+        delta_bytes(
+            result.memory_after_build
+                .physical_footprint_bytes,
+            result.memory_after_vectors
+                .physical_footprint_bytes
+        );
+
+    const double index_bytes_per_vector =
+        static_cast<double>(
+            index_over_vectors_bytes
+        ) /
+        static_cast<double>(
+            result.vector_count
+        );
+
+    std::cout
+        << "\n[Descomposicion]\n"
+        << "Vectores teoricos  : "
+        << bytes_to_mib(
+            result.expected_vector_bytes
+        )
+        << " MiB\n"
+        << "Vectores observados: "
+        << (
+            static_cast<double>(
+                observed_vector_bytes
+            ) /
+            (1024.0 * 1024.0)
+        )
+        << " MiB\n"
+        << "Indice sobre vector: "
+        << (
+            static_cast<double>(
+                index_over_vectors_bytes
+            ) /
+            (1024.0 * 1024.0)
+        )
+        << " MiB\n"
+        << "Indice bytes/vector: "
+        << std::fixed
+        << std::setprecision(2)
+        << index_bytes_per_vector
+        << " B/vector\n\n";
 
     if (!result.passed) {
 
         std::cerr
-            << "[G3C] FAIL\n";
+            << "[G3D] FAIL\n";
 
         return 1;
     }
 
     std::cout
-        << "[G3C] PASS\n";
+        << "[G3D] PASS\n";
 
     return 0;
 }

@@ -3,27 +3,30 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Construir un HNSW parametrizable para medir cómo escala su memoria
-//  en función del número de vectores.
+//  Ejecutar un HNSW parametrizable en N y D para separar el coste
+//  del almacenamiento vectorial del coste estructural del índice.
 //
 //  Gate:
-//  G3C — Escalado controlado de memoria.
-//
-//  Diseño:
-//  Cada tamaño N debe ejecutarse en un proceso independiente para evitar
-//  contaminación entre experimentos por cachés y retención del allocator.
+//  G3D — Descomposición memoria VectorStore / HNSW.
 //
 //  Dataset:
-//      x_i = [i, 0, 0, 0]
+//      x_i = [i, 0, 0, ..., 0]
 //
 //  Consulta:
-//      q = [N/2 + 0.1, 0, 0, 0]
+//      q = [N/2 + 0.1, 0, 0, ..., 0]
 //
-//  Esto hace que el ground truth sea determinista.
+//  La geometría es deliberadamente simple y determinista.
 //
-//  Advertencia:
-//  D=4 es deliberado. Este Gate caracteriza principalmente el coste
-//  estructural del índice, no el coste final de un embedding real.
+//  Invariantes:
+//  - M = 16.
+//  - efConstruction = 64.
+//  - efSearch = 64.
+//  - Un hilo.
+//  - HNSW puro.
+//  - Sin filtros.
+//  - Sin ACORN.
+//  - Sin RACORN.
+//  - Sin Metal.
 //
 
 #include "baseline/HnswBaseline.hpp"
@@ -33,8 +36,8 @@
 #include <usearch/index.hpp>
 #include <usearch/index_plugins.hpp>
 
-#include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <new>
 #include <stdexcept>
 #include <unordered_set>
@@ -49,7 +52,6 @@ using namespace unum::usearch;
 
 using racorn_uma::platform::apple::MemoryInfo;
 
-constexpr std::size_t kDimensions = 4;
 constexpr std::size_t kConnectivity = 16;
 constexpr std::size_t kEfConstruction = 64;
 constexpr std::size_t kEfSearch = 64;
@@ -65,14 +67,16 @@ class VectorStore final {
 
 public:
 
-    explicit VectorStore(
-        std::size_t vector_count
-    ) {
-
-        data_.resize(
-            vector_count *
-            kDimensions
-        );
+    VectorStore(
+        std::size_t vector_count,
+        std::size_t dimensions
+    )
+        : dimensions_(dimensions),
+          data_(
+              vector_count *
+              dimensions,
+              0.0F
+          ) {
 
         for (
             std::size_t i = 0;
@@ -80,16 +84,10 @@ public:
             ++i
         ) {
 
-            float* vector =
-                data_.data() +
-                i * kDimensions;
-
-            vector[0] =
+            data_[
+                i * dimensions_
+            ] =
                 static_cast<float>(i);
-
-            vector[1] = 0.0F;
-            vector[2] = 0.0F;
-            vector[3] = 0.0F;
         }
     }
 
@@ -100,11 +98,12 @@ public:
 
         return
             data_.data() +
-            index * kDimensions;
+            index * dimensions_;
     }
 
 private:
 
+    std::size_t dimensions_{};
     std::vector<float> data_;
 };
 
@@ -119,6 +118,7 @@ struct L2Metric final {
         typename IndexType::member_citerator_t;
 
     VectorStore const* store{};
+    std::size_t dimensions{};
 
     [[nodiscard]]
     float const* row(
@@ -133,10 +133,13 @@ struct L2Metric final {
         MemberRef const& second
     ) const {
 
-        return metric_l2sq_gt<float, float>{}(
+        return metric_l2sq_gt<
+            float,
+            float
+        >{}(
             row(get_key(second)),
             row(get_key(first)),
-            kDimensions
+            dimensions
         );
     }
 
@@ -145,10 +148,13 @@ struct L2Metric final {
         MemberRef const& member
     ) const {
 
-        return metric_l2sq_gt<float, float>{}(
+        return metric_l2sq_gt<
+            float,
+            float
+        >{}(
             query,
             row(get_key(member)),
-            kDimensions
+            dimensions
         );
     }
 
@@ -157,10 +163,13 @@ struct L2Metric final {
         MemberIterator const& second
     ) const {
 
-        return metric_l2sq_gt<float, float>{}(
+        return metric_l2sq_gt<
+            float,
+            float
+        >{}(
             row(get_key(*second)),
             row(get_key(*first)),
-            kDimensions
+            dimensions
         );
     }
 
@@ -169,10 +178,13 @@ struct L2Metric final {
         MemberIterator const& member
     ) const {
 
-        return metric_l2sq_gt<float, float>{}(
+        return metric_l2sq_gt<
+            float,
+            float
+        >{}(
             query,
             row(get_key(*member)),
-            kDimensions
+            dimensions
         );
     }
 };
@@ -309,13 +321,19 @@ double recall_at_k(
 
 HnswBaselineResult
 HnswBaseline::run(
-    std::size_t vector_count
+    std::size_t vector_count,
+    std::size_t dimensions
 ) {
 
     if (vector_count < kNeighbors) {
-
         throw std::invalid_argument(
             "vector_count debe ser >= k"
+        );
+    }
+
+    if (dimensions == 0) {
+        throw std::invalid_argument(
+            "dimensions debe ser > 0"
         );
     }
 
@@ -325,14 +343,16 @@ HnswBaseline::run(
         MemoryInfo::capture();
 
     VectorStore store(
-        vector_count
+        vector_count,
+        dimensions
     );
 
     output.memory_after_vectors =
         MemoryInfo::capture();
 
     L2Metric metric{
-        .store = &store
+        .store = &store,
+        .dimensions = dimensions
     };
 
     index_config_t
@@ -384,16 +404,16 @@ HnswBaseline::run(
     output.memory_after_build =
         MemoryInfo::capture();
 
-    const float query[kDimensions]{
+    std::vector<float>
+        query(
+            dimensions,
+            0.0F
+        );
 
+    query[0] =
         static_cast<float>(
             vector_count / 2
-        ) + 0.1F,
-
-        0.0F,
-        0.0F,
-        0.0F
-    };
+        ) + 0.1F;
 
     AllowAll allow_all;
 
@@ -408,7 +428,7 @@ HnswBaseline::run(
 
     auto exact_result =
         index.search(
-            query,
+            query.data(),
             kNeighbors,
             metric,
             exact_configuration,
@@ -444,7 +464,7 @@ HnswBaseline::run(
 
     auto hnsw_result =
         index.search(
-            query,
+            query.data(),
             kNeighbors,
             metric,
             hnsw_configuration,
@@ -470,7 +490,7 @@ HnswBaseline::run(
         index.size();
 
     output.dimensions =
-        kDimensions;
+        dimensions;
 
     output.connectivity =
         kConnectivity;
@@ -483,6 +503,15 @@ HnswBaseline::run(
 
     output.k =
         kNeighbors;
+
+    output.expected_vector_bytes =
+        static_cast<std::uint64_t>(
+            vector_count
+        ) *
+        static_cast<std::uint64_t>(
+            dimensions
+        ) *
+        sizeof(float);
 
     output.exact_keys =
         std::move(

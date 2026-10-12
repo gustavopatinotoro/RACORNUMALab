@@ -3,23 +3,22 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Definir un experimento HNSW parametrizable para estudiar el
-//  escalado de memoria sobre Apple Silicon.
+//  Definir un experimento HNSW parametrizable para separar empíricamente
+//  el coste de almacenamiento vectorial del coste estructural del grafo.
 //
 //  Gate:
-//  G3C — Escalado controlado de memoria HNSW.
+//  G3D — Descomposición memoria VectorStore / HNSW.
 //
-//  Variable experimental:
+//  Variables experimentales:
 //  - Número de vectores N.
+//  - Dimensionalidad D.
 //
 //  Variables controladas:
-//  - Dimensión.
 //  - M.
 //  - efConstruction.
 //  - efSearch.
 //  - Número de hilos.
 //  - Métrica.
-//  - Semilla lógica del dataset.
 //
 //  Invariantes:
 //  - ACORN desactivado.
@@ -34,6 +33,7 @@
 #include "platform/apple/MemoryInfo.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace racorn_uma::baseline {
@@ -47,25 +47,18 @@ struct HnswBaselineResult final {
     std::size_t ef_search{};
     std::size_t k{};
 
+    std::uint64_t expected_vector_bytes{};
+
     std::vector<std::size_t> exact_keys;
     std::vector<std::size_t> hnsw_keys;
 
     double recall_at_k{};
 
-    platform::apple::ProcessMemorySnapshot
-        memory_start;
-
-    platform::apple::ProcessMemorySnapshot
-        memory_after_vectors;
-
-    platform::apple::ProcessMemorySnapshot
-        memory_after_reserve;
-
-    platform::apple::ProcessMemorySnapshot
-        memory_after_build;
-
-    platform::apple::ProcessMemorySnapshot
-        memory_after_search;
+    platform::apple::ProcessMemorySnapshot memory_start;
+    platform::apple::ProcessMemorySnapshot memory_after_vectors;
+    platform::apple::ProcessMemorySnapshot memory_after_reserve;
+    platform::apple::ProcessMemorySnapshot memory_after_build;
+    platform::apple::ProcessMemorySnapshot memory_after_search;
 
     bool passed{};
 };
@@ -76,7 +69,8 @@ public:
 
     [[nodiscard]]
     static HnswBaselineResult run(
-        std::size_t vector_count
+        std::size_t vector_count,
+        std::size_t dimensions
     );
 };
 
