@@ -3,30 +3,22 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar G-DATA1A — Tail Failure Audit.
+//  Ejecutar G-DATA2.
 //
-//  Este Gate analiza las queries imperfectas observadas durante G-DATA1
-//  y distingue:
+//  Comparación:
+//      RACORN-1 vs RACORN-1+ Adaptive Exact Fallback.
 //
-//      - underfill;
-//      - resultado vacío;
-//      - top-k completo pero incorrecto.
-//
-//  Una degradación de calidad NO invalida el experimento.
-//
-//  El directorio SIFT se proporciona con:
-//
+//  Directorio SIFT:
 //      --data-dir <ruta>
 //
 //  o:
-//
 //      RACORNUMA_SIFT_DIR=<ruta>
 //
 //  Ejecutar en Release.
 //
 
 #include "core/BuildInfo.hpp"
-#include "core/RacornSiftTailAudit.hpp"
+#include "core/RacornSiftExactFallback.hpp"
 #include "integration/RacornProbe.hpp"
 #include "platform/apple/SystemInfo.hpp"
 
@@ -121,7 +113,7 @@ int main(
         BuildInfo;
 
     using racorn_uma::core::
-        RacornSiftTailAudit;
+        RacornSiftExactFallback;
 
     using racorn_uma::integration::
         RacornProbe;
@@ -138,14 +130,14 @@ int main(
             );
 
         const auto result =
-            RacornSiftTailAudit::run(
+            RacornSiftExactFallback::run(
                 data_directory
             );
 
         std::cout
             << "\n========================================\n"
             << " RACORNUMALab\n"
-            << " Gate G-DATA1A - Tail Failure Audit\n"
+            << " Gate G-DATA2 - RACORN-1 vs RACORN-1+\n"
             << "========================================\n\n";
 
         std::cout
@@ -206,40 +198,67 @@ int main(
             << "\n\n";
 
         std::cout
-            << "[Resumen de cola]\n\n";
+            << "[Configuracion fija]\n"
+            << "M                           : "
+            << result.connectivity
+            << '\n'
+            << "efConstruction              : "
+            << result.ef_construction
+            << '\n'
+            << "efSearch                    : "
+            << result.ef_search
+            << '\n'
+            << "two_hop_threshold           : "
+            << std::fixed
+            << std::setprecision(2)
+            << result.two_hop_threshold
+            << '\n'
+            << "Mean Recall target          : "
+            << std::setprecision(4)
+            << result.mean_recall_target
+            << '\n'
+            << "Min Recall target           : "
+            << result.min_recall_target
+            << "\n\n";
+
+        std::cout
+            << "[Matriz RACORN-1 / RACORN-1+]\n\n";
 
         std::cout
             << std::left
-            << std::setw(8)
+            << std::setw(7)
             << "BR"
 
+            << std::setw(9)
+            << "Tau"
+
+            << std::setw(9)
+            << "Modo"
+
             << std::right
-            << std::setw(11)
+            << std::setw(10)
             << "Recall"
 
-            << std::setw(11)
+            << std::setw(10)
             << "MinRec"
 
             << std::setw(9)
             << "Perfect"
 
-            << std::setw(10)
-            << "Underfill"
-
-            << std::setw(8)
-            << "Empty"
+            << std::setw(9)
+            << "Under"
 
             << std::setw(11)
             << "FullWrong"
 
-            << std::setw(9)
-            << "ResMin"
-
-            << std::setw(9)
-            << "WorstQ"
+            << std::setw(10)
+            << "Exact"
 
             << std::setw(10)
-            << "Valid"
+            << "Exact%"
+
+            << std::setw(10)
+            << "Robust"
 
             << '\n';
 
@@ -252,39 +271,53 @@ int main(
                 << std::left
                 << std::fixed
                 << std::setprecision(2)
-                << std::setw(8)
+                << std::setw(7)
                 << item.bridge_budget_ratio
+
+                << std::setprecision(3)
+                << std::setw(9)
+                << item.fallback_exact_threshold
+
+                << std::setw(9)
+                << (
+                    item.racorn_one_plus
+                        ? "R-1+"
+                        : "R-1"
+                )
 
                 << std::right
                 << std::setprecision(4)
 
-                << std::setw(11)
+                << std::setw(10)
                 << item.mean_recall_at_k
 
-                << std::setw(11)
+                << std::setw(10)
                 << item.min_recall_at_k
 
                 << std::setw(9)
                 << item.perfect_queries
 
-                << std::setw(10)
+                << std::setw(9)
                 << item.underfilled_queries
-
-                << std::setw(8)
-                << item.empty_queries
 
                 << std::setw(11)
                 << item.full_but_inexact_queries
 
-                << std::setw(9)
-                << item.result_count_min
-
-                << std::setw(9)
-                << item.worst_query_index
-
                 << std::setw(10)
+                << item.exact_fallback_queries
+
+                << std::setw(9)
+                << std::setprecision(2)
                 << (
-                    item.valid
+                    item.exact_fallback_fraction *
+                    100.0
+                )
+
+                << "%"
+
+                << std::setw(9)
+                << (
+                    item.robust_quality_pass
                         ? "PASS"
                         : "FAIL"
                 )
@@ -292,12 +325,8 @@ int main(
                 << '\n';
         }
 
-        //
-        // Histogramas.
-        //
-
         std::cout
-            << "\n[Histogramas Recall@10]\n";
+            << "\n[Trabajo algorítmico]\n";
 
         for (
             auto const& item :
@@ -309,103 +338,10 @@ int main(
                 << std::fixed
                 << std::setprecision(2)
                 << item.bridge_budget_ratio
-                << " | ";
 
-            for (
-                std::size_t bin = 0;
-                bin <= 10U;
-                ++bin
-            ) {
-
-                if (
-                    item.recall_histogram[
-                        bin
-                    ] ==
-                    0U
-                ) {
-                    continue;
-                }
-
-                std::cout
-                    << std::fixed
-                    << std::setprecision(1)
-                    << (
-                        static_cast<double>(
-                            bin
-                        ) /
-                        10.0
-                    )
-                    << ":"
-                    << item.recall_histogram[
-                        bin
-                    ]
-                    << " ";
-            }
-
-            std::cout
-                << '\n';
-        }
-
-        std::cout
-            << "\n[Histogramas result_count]\n";
-
-        for (
-            auto const& item :
-            result.cases
-        ) {
-
-            std::cout
-                << "BR="
-                << std::fixed
-                << std::setprecision(2)
-                << item.bridge_budget_ratio
-                << " | ";
-
-            for (
-                std::size_t count = 0;
-                count <= result.k;
-                ++count
-            ) {
-
-                if (
-                    item.result_count_histogram[
-                        count
-                    ] ==
-                    0U
-                ) {
-                    continue;
-                }
-
-                std::cout
-                    << count
-                    << ":"
-                    << item.result_count_histogram[
-                        count
-                    ]
-                    << " ";
-            }
-
-            std::cout
-                << '\n';
-        }
-
-        //
-        // Trabajo.
-        //
-
-        std::cout
-            << "\n[Trabajo RACORN]\n";
-
-        for (
-            auto const& item :
-            result.cases
-        ) {
-
-            std::cout
-                << "BR="
-                << std::fixed
-                << std::setprecision(2)
-                << item.bridge_budget_ratio
+                << " tau="
+                << std::setprecision(3)
+                << item.fallback_exact_threshold
 
                 << " | dist="
                 << std::setprecision(3)
@@ -420,22 +356,38 @@ int main(
                 << " | fallback="
                 << item.mean_fallback_count
 
-                << " | P01="
-                << std::setprecision(4)
-                << item.recall_p01
+                << " | fbSel=";
 
-                << " | P05="
-                << item.recall_p05
+            if (
+                item.fallback_selectivity_samples >
+                0U
+            ) {
+
+                std::cout
+                    << std::setprecision(6)
+                    << item.mean_fallback_selectivity;
+
+            } else {
+
+                std::cout
+                    << "NA";
+            }
+
+            std::cout
+                << " | fbSelN="
+                << item.fallback_selectivity_samples
+
+                << " | exact="
+                << item.exact_fallback_queries
+
+                << "/"
+                << result.query_count
 
                 << '\n';
         }
 
-        //
-        // Auditoría query por query.
-        //
-
         std::cout
-            << "\n[Queries imperfectas]\n";
+            << "\n[Cola de Recall]\n";
 
         for (
             auto const& item :
@@ -443,90 +395,39 @@ int main(
         ) {
 
             std::cout
-                << "\n--- BR="
+                << "BR="
                 << std::fixed
                 << std::setprecision(2)
                 << item.bridge_budget_ratio
-                << " | imperfectas="
+
+                << " tau="
+                << std::setprecision(3)
+                << item.fallback_exact_threshold
+
+                << " | Recall="
+                << std::setprecision(4)
+                << item.mean_recall_at_k
+
+                << " | Min="
+                << item.min_recall_at_k
+
+                << " | P01="
+                << item.recall_p01
+
+                << " | P05="
+                << item.recall_p05
+
+                << " | perfect="
+                << item.perfect_queries
+
+                << " | imperfect="
                 << item.imperfect_queries
-                << " ---\n";
 
-            for (
-                auto const& record :
-                item.imperfect_records
-            ) {
-
-                std::cout
-                    << "q="
-                    << record.query_index
-
-                    << " tenant="
-                    << record.tenant_required
-
-                    << " eligible="
-                    << record.selected_count
-
-                    << " results="
-                    << record.result_count
-
-                    << " hits="
-                    << record.hits
-                    << "/"
-                    << result.k
-
-                    << " recall="
-                    << std::fixed
-                    << std::setprecision(1)
-                    << record.recall_at_k
-
-                    << " dist="
-                    << record.computed_distances
-
-                    << " visited="
-                    << record.visited_members
-
-                    << " pred="
-                    << record.predicate_evaluations
-
-                    << " fallback="
-                    << record.fallback_count
-
-                    << " type=";
-
-                if (
-                    record.empty
-                ) {
-
-                    std::cout
-                        << "EMPTY";
-
-                } else if (
-                    record.underfilled
-                ) {
-
-                    std::cout
-                        << "UNDERFILL";
-
-                } else if (
-                    record.full_but_inexact
-                ) {
-
-                    std::cout
-                        << "FULL_BUT_INEXACT";
-
-                } else {
-
-                    std::cout
-                        << "OTHER";
-                }
-
-                std::cout
-                    << '\n';
-            }
+                << '\n';
         }
 
         std::cout
-            << "\n[Validez experimental]\n"
+            << "\n[Validez]\n"
             << "Base valida                 : "
             << yes_no(
                 result.base_file_valid
@@ -551,6 +452,11 @@ int main(
             << yes_no(
                 result.all_cases_valid
             )
+            << '\n'
+            << "Configuracion robusta hallada: "
+            << yes_no(
+                result.robust_configuration_found
+            )
             << "\n\n";
 
         std::cout
@@ -560,10 +466,11 @@ int main(
                 result.racorn_modified
             )
             << '\n'
-            << "Navegacion                  : CPU\n"
+            << "Navegacion RACORN           : CPU\n"
             << "Metal                       : NO\n"
             << "GPU                         : NO\n"
-            << "Exact fallback              : NO\n"
+            << "Bitset                      : NO\n"
+            << "Exact fallback              : upstream RACORN-1+\n"
             << "Underfill invalida harness  : NO\n"
             << "Ground truth                : exacto filtrado\n\n";
 
@@ -572,13 +479,13 @@ int main(
         ) {
 
             std::cerr
-                << "[G-DATA1A] FAIL\n";
+                << "[G-DATA2] FAIL\n";
 
             return 1;
         }
 
         std::cout
-            << "[G-DATA1A] PASS\n";
+            << "[G-DATA2] PASS\n";
 
         return 0;
 
@@ -587,7 +494,7 @@ int main(
     ) {
 
         std::cerr
-            << "\n[G-DATA1A] FAIL: "
+            << "\n[G-DATA2] FAIL: "
             << error.what()
             << '\n';
 
