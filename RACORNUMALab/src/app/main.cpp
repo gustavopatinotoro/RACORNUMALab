@@ -3,25 +3,24 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar G-DATA3A — SIFT Real / CPU vs UMA-Metal.
+//  Ejecutar el Gate final de la rama Metal-predicate:
 //
-//  Estrategias:
-//      CPU-Lazy
-//      CPU-Bitset
-//      GPU-Bitset
+//      G-DATA3B — SIFT UMA Pipeline.
 //
-//  Ejecutar en Release.
+//  Resultado posible:
 //
-//  Dataset:
-//      --data-dir <ruta>
+//      CONTINUE_METAL
 //
 //  o:
-//      RACORNUMA_SIFT_DIR=<ruta>
+//
+//      STOP_METAL_PREDICATE
+//
+//  Un STOP no implica FAIL experimental.
 //
 
 #include "core/BuildInfo.hpp"
 #include "integration/RacornProbe.hpp"
-#include "platform/apple/SiftUmaPredicateBenchmark.hpp"
+#include "platform/apple/SiftUmaPipelineBenchmark.hpp"
 #include "platform/apple/SystemInfo.hpp"
 
 #include <cstdlib>
@@ -54,11 +53,10 @@ std::filesystem::path resolve_data_directory(
         ++index
     ) {
 
-        const std::string argument =
-            argv[index];
-
         if (
-            argument ==
+            std::string(
+                argv[index]
+            ) ==
             "--data-dir"
         ) {
 
@@ -69,91 +67,67 @@ std::filesystem::path resolve_data_directory(
             ) {
 
                 throw std::runtime_error(
-                    "--data-dir requiere una ruta."
+                    "--data-dir requiere ruta."
                 );
             }
 
             return
-                std::filesystem::path(
-                    argv[
-                        index +
-                        1
-                    ]
-                );
+                argv[
+                    index +
+                    1
+                ];
         }
     }
 
     if (
-        char const* environment =
+        char const* value =
             std::getenv(
                 "RACORNUMA_SIFT_DIR"
             );
-        environment != nullptr &&
-        environment[0] != '\0'
+        value != nullptr &&
+        value[0] != '\0'
     ) {
 
-        return
-            std::filesystem::path(
-                environment
-            );
+        return value;
     }
 
     throw std::runtime_error(
-        "Especifique --data-dir o RACORNUMA_SIFT_DIR."
+        "Especifique --data-dir."
     );
 }
 
-void print_latency(
-    char const* label,
+void print_stats(
+    char const* name,
     racorn_uma::platform::apple::
-        SiftUmaLatencyStats const& stats
+        PipelineLatencyStats const& stats
 ) {
 
     std::cout
-        << label
-        << "\n"
-        << "  total p50/p95/p99   : "
+        << name
+        << '\n'
+        << "  batch p50/p95/p99      : "
         << std::fixed
-        << std::setprecision(4)
-        << stats.total_p50_ms
+        << std::setprecision(3)
+        << stats.batch_p50_ms
         << " / "
-        << stats.total_p95_ms
+        << stats.batch_p95_ms
         << " / "
-        << stats.total_p99_ms
+        << stats.batch_p99_ms
         << " ms\n"
-        << "  prepare p50/p95/p99 : "
-        << stats.prepare_p50_ms
+        << "  exposed wait p50/p95   : "
+        << stats.exposed_wait_p50_ms
         << " / "
-        << stats.prepare_p95_ms
-        << " / "
-        << stats.prepare_p99_ms
+        << stats.exposed_wait_p95_ms
         << " ms\n"
-        << "  search p50/p95/p99  : "
-        << stats.search_p50_ms
+        << "  prepare work p50/p95   : "
+        << stats.prepare_work_p50_ms
         << " / "
-        << stats.search_p95_ms
-        << " / "
-        << stats.search_p99_ms
+        << stats.prepare_work_p95_ms
         << " ms\n"
-        << "  QPS desde p50       : "
+        << "  QPS p50                : "
         << std::setprecision(2)
-        << stats.qps_from_p50
-        << '\n';
-
-    if (
-        stats.gpu_device_timing_available
-    ) {
-
-        std::cout
-            << "  GPU device p50/p95/p99: "
-            << std::setprecision(4)
-            << stats.gpu_device_p50_ms
-            << " / "
-            << stats.gpu_device_p95_ms
-            << " / "
-            << stats.gpu_device_p99_ms
-            << " ms\n";
-    }
+        << stats.qps_p50
+        << "\n";
 }
 
 } // namespace
@@ -170,7 +144,7 @@ int main(
         RacornProbe;
 
     using racorn_uma::platform::apple::
-        SiftUmaPredicateBenchmark;
+        SiftUmaPipelineBenchmark;
 
     using racorn_uma::platform::apple::
         SystemInfo;
@@ -184,14 +158,14 @@ int main(
             );
 
         const auto result =
-            SiftUmaPredicateBenchmark::run(
+            SiftUmaPipelineBenchmark::run(
                 data_directory
             );
 
         std::cout
             << "\n========================================\n"
             << " RACORNUMALab\n"
-            << " Gate G-DATA3A - SIFT CPU vs UMA-Metal\n"
+            << " Gate G-DATA3B - SIFT UMA Pipeline\n"
             << "========================================\n\n";
 
         std::cout
@@ -222,40 +196,16 @@ int main(
             << "\n\n";
 
         std::cout
-            << "[Dataset]\n"
-            << "Dataset                     : SIFT1M\n"
-            << "Subset                      : train[0:100000]\n"
-            << "Directorio externo          : "
-            << result.data_directory.string()
-            << '\n'
+            << "[Configuracion]\n"
             << "N                           : "
             << result.vector_count
             << '\n'
             << "D                           : "
             << result.dimensions
             << '\n'
-            << "Queries semantica           : "
-            << result.semantic_query_count
+            << "Queries/batch               : "
+            << result.query_count
             << '\n'
-            << "Queries benchmark           : "
-            << result.benchmark_query_count
-            << '\n'
-            << "Selectividad media          : "
-            << std::fixed
-            << std::setprecision(4)
-            << (
-                result.mean_selectivity *
-                100.0
-            )
-            << "%\n"
-            << "Elegibles/query             : "
-            << result.selected_min
-            << ".."
-            << result.selected_max
-            << "\n\n";
-
-        std::cout
-            << "[Configuracion RACORN]\n"
             << "M                           : "
             << result.connectivity
             << '\n'
@@ -276,7 +226,13 @@ int main(
             << "two_hop_threshold           : "
             << result.two_hop_threshold
             << '\n'
-            << "fallback_exact_threshold    : 0.0\n\n";
+            << "Exact fallback              : NO\n"
+            << "Warmup batches              : "
+            << result.warmup_batches
+            << '\n'
+            << "Measured batches            : "
+            << result.measured_batches
+            << "\n\n";
 
         std::cout
             << "[Metal]\n"
@@ -296,20 +252,35 @@ int main(
             << "Kernel                      : "
             << result.kernel_name
             << '\n'
-            << "Pipeline                    : "
-            << yes_no(
-                result.pipeline_available
-            )
-            << '\n'
-            << "Execution width             : "
-            << result.thread_execution_width
-            << '\n'
             << "Threads/group               : "
             << result.threads_per_threadgroup
             << "\n\n";
 
         std::cout
-            << "[Calidad RACORN]\n"
+            << "[Semantica]\n"
+            << "Bitset mismatches           : "
+            << result.bitset_word_mismatches
+            << '\n'
+            << "CPU top-k mismatches        : "
+            << result.cpu_topk_mismatches
+            << '\n'
+            << "CPU counter mismatches      : "
+            << result.cpu_counter_mismatches
+            << '\n'
+            << "GPU top-k mismatches        : "
+            << result.gpu_topk_mismatches
+            << '\n'
+            << "GPU counter mismatches      : "
+            << result.gpu_counter_mismatches
+            << '\n'
+            << "Identidad semantica         : "
+            << yes_no(
+                result.semantic_identity
+            )
+            << "\n\n";
+
+        std::cout
+            << "[Calidad - 256 queries]\n"
             << "Mean Recall@10              : "
             << std::fixed
             << std::setprecision(4)
@@ -318,12 +289,12 @@ int main(
             << "Min Recall@10               : "
             << result.min_recall_at_k
             << '\n'
-            << "Queries perfectas           : "
+            << "Perfectas                   : "
             << result.perfect_queries
             << "/"
-            << result.semantic_query_count
+            << result.query_count
             << '\n'
-            << "Queries imperfectas         : "
+            << "Imperfectas                 : "
             << result.imperfect_queries
             << '\n'
             << "Underfill                   : "
@@ -331,65 +302,9 @@ int main(
             << "\n\n";
 
         std::cout
-            << "[Trabajo RACORN]\n"
-            << "computed_distances mean     : "
-            << result.mean_computed_distances
-            << '\n'
-            << "visited_members mean        : "
-            << result.mean_visited_members
-            << '\n'
-            << "predicate_evaluations mean  : "
-            << result.mean_predicate_evaluations
-            << '\n'
-            << "fallback_count mean         : "
-            << result.mean_fallback_count
-            << "\n\n";
+            << "[Pipeline]\n";
 
-        std::cout
-            << "[Equivalencia semantica]\n"
-            << "Bitset word mismatches      : "
-            << result.bitset_word_mismatches
-            << '\n'
-            << "Predicate mismatches        : "
-            << result.predicate_representation_mismatches
-            << '\n'
-            << "Top-k mismatches            : "
-            << result.topk_mismatch_queries
-            << '\n'
-            << "Result-count mismatches     : "
-            << result.result_count_mismatch_queries
-            << '\n'
-            << "Recall mismatches           : "
-            << result.recall_mismatch_queries
-            << '\n'
-            << "Distance-count mismatches   : "
-            << result.computed_distances_mismatch_queries
-            << '\n'
-            << "Visited mismatches          : "
-            << result.visited_members_mismatch_queries
-            << '\n'
-            << "Predicate-count mismatches  : "
-            << result.predicate_evaluations_mismatch_queries
-            << '\n'
-            << "Fallback mismatches         : "
-            << result.fallback_count_mismatch_queries
-            << '\n'
-            << "Semantica identica          : "
-            << yes_no(
-                result.navigation_semantics_identical
-            )
-            << "\n\n";
-
-        std::cout
-            << "[Benchmark]\n"
-            << "Warm-up rounds              : "
-            << result.warmup_rounds
-            << '\n'
-            << "Measured rounds             : "
-            << result.measured_rounds
-            << "\n\n";
-
-        print_latency(
+        print_stats(
             "CPU-Lazy",
             result.cpu_lazy
         );
@@ -397,82 +312,74 @@ int main(
         std::cout
             << '\n';
 
-        print_latency(
-            "CPU-Bitset",
-            result.cpu_bitset
+        print_stats(
+            "CPU-Bitset-Pipeline",
+            result.cpu_pipeline
         );
 
         std::cout
             << '\n';
 
-        print_latency(
-            "GPU-Bitset",
-            result.gpu_bitset
+        print_stats(
+            "GPU-Bitset-Pipeline",
+            result.gpu_pipeline
         );
 
         std::cout
-            << "\n[Speedup p50 end-to-end]\n"
-            << "CPU-Bitset / Lazy           : "
+            << "\n[Speedup]\n"
+            << "CPU-Pipeline / Lazy         : "
             << std::fixed
             << std::setprecision(3)
-            << result.cpu_bitset_speedup_vs_lazy
+            << result.cpu_speedup_vs_lazy
             << "x\n"
-            << "GPU-Bitset / Lazy           : "
-            << result.gpu_bitset_speedup_vs_lazy
+            << "GPU-Pipeline / Lazy         : "
+            << result.gpu_speedup_vs_lazy
             << "x\n"
-            << "GPU-Bitset / CPU-Bitset     : "
-            << result.gpu_vs_cpu_bitset
+            << "GPU-Pipeline / CPU-Pipeline : "
+            << result.gpu_speedup_vs_cpu
             << "x\n"
-            << "Ganador p50                 : "
-            << result.p50_winner
+            << "GPU p95 / CPU p95           : "
+            << result.gpu_p95_ratio_vs_cpu
+            << "x\n\n";
+
+        std::cout
+            << "[Criterio de corte predefinido]\n"
+            << "GPU p50 >= 1.02x CPU        : "
+            << yes_no(
+                result.gpu_p50_margin_pass
+            )
+            << '\n'
+            << "GPU p95 <= 1.02x CPU        : "
+            << yes_no(
+                result.gpu_p95_guard_pass
+            )
+            << '\n'
+            << "Metal merece continuar      : "
+            << yes_no(
+                result.gpu_pipeline_worthwhile
+            )
             << "\n\n";
 
         std::cout
-            << "[Validez]\n"
-            << "Base valida                 : "
-            << yes_no(
-                result.base_file_valid
-            )
+            << "========================================\n"
+            << " DECISION: "
+            << result.decision
             << '\n'
-            << "Queries validas              : "
-            << yes_no(
-                result.query_file_valid
-            )
-            << '\n'
-            << "Metadata valida              : "
-            << yes_no(
-                result.metadata_file_valid
-            )
-            << '\n'
-            << "Ground truth completo        : "
-            << yes_no(
-                result.exact_ground_truth_complete
-            )
-            << '\n'
-            << "Filtro resultados valido     : "
-            << yes_no(
-                result.filter_results_valid
-            )
-            << '\n'
-            << "Semantica CPU/GPU identica  : "
-            << yes_no(
-                result.navigation_semantics_identical
-            )
-            << "\n\n";
+            << "========================================\n\n";
 
         std::cout
             << "[Invariantes]\n"
-            << "RACORN modificado            : "
+            << "RACORN modificado           : "
             << yes_no(
                 result.racorn_modified
             )
             << '\n'
-            << "Navegacion                  : CPU\n"
-            << "Metal                       : solo predicado\n"
-            << "Metadata                    : Shared\n"
-            << "CPU bitset                  : Shared\n"
-            << "GPU bitset                  : Shared\n"
-            << "Copias CPU-VRAM             : NO\n"
+            << "Navegacion RACORN           : CPU\n"
+            << "CPU worker persistente      : SI\n"
+            << "GPU preparacion asincrona   : SI\n"
+            << "Double buffering CPU        : SI\n"
+            << "Double buffering GPU        : SI\n"
+            << "Navegacion GPU              : NO\n"
             << "Exact fallback              : NO\n\n";
 
         if (
@@ -490,13 +397,13 @@ int main(
         ) {
 
             std::cerr
-                << "[G-DATA3A] FAIL\n";
+                << "[G-DATA3B] FAIL\n";
 
             return 1;
         }
 
         std::cout
-            << "[G-DATA3A] PASS\n";
+            << "[G-DATA3B] PASS\n";
 
         return 0;
 
@@ -505,7 +412,7 @@ int main(
     ) {
 
         std::cerr
-            << "\n[G-DATA3A] FAIL: "
+            << "\n[G-DATA3B] FAIL: "
             << error.what()
             << '\n';
 
