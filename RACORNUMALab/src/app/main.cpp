@@ -3,35 +3,36 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar G4C: múltiples realizaciones topológicas de un filtro con
-//  aproximadamente la misma selectividad sobre un único índice HNSW.
+//  Ejecutar la ablación de bridge_budget_ratio de RACORN-1.
 //
 //  Gate:
-//  G4C — Replicación topológica del filtro.
+//  G4D — Sweep de bridge_budget_ratio.
 //
 //  Ejemplo:
 //
-//      RACORNUMALab --modulus 100 --residues 8
+//      RACORNUMALab --modulus 200 --residues 8
 //
-//  Con threshold = 1:
+//  Con:
 //
-//      modulus = 100
+//      modulus = 200
+//      threshold = 1
 //
-//  corresponde aproximadamente a:
+//  la selectividad nominal es:
 //
-//      s = 1 %
+//      0.5 %
 //
-//  y --residues 8 evalúa ocho clases residuales distribuidas a lo
-//  largo del espacio [0, modulus).
+//  El programa evalúa internamente:
 //
-//  Nota metodológica:
-//  Las realizaciones se ejecutan deliberadamente dentro del mismo proceso
-//  porque este Gate no mide memoria ni latencia. Queremos que todas ellas
-//  compartan exactamente la misma topología HNSW.
+//      BR = 0.25
+//      BR = 0.50
+//      BR = 0.75
+//      BR = 1.00
+//
+//  sobre el mismo índice, consultas y realizaciones del filtro.
 //
 
 #include "core/BuildInfo.hpp"
-#include "filtered/FilteredSearchBaseline.hpp"
+#include "filtered/BridgeBudgetSweep.hpp"
 #include "integration/RacornProbe.hpp"
 #include "platform/apple/SystemInfo.hpp"
 
@@ -46,7 +47,7 @@ namespace {
 struct RunConfiguration final {
 
     std::size_t modulus =
-        100;
+        200;
 
     std::size_t threshold =
         1;
@@ -206,8 +207,6 @@ RunConfiguration parse_arguments(
     if (
         configuration.modulus ==
             0 ||
-        configuration.modulus >
-            1'000'000 ||
         configuration.threshold ==
             0 ||
         configuration.threshold >
@@ -234,20 +233,15 @@ void print_usage() {
         << "[--threshold <T>] "
         << "[--residues <R>]\n\n"
 
-        << "Valores por defecto:\n"
-        << "  modulus   = 100\n"
-        << "  threshold = 1\n"
-        << "  residues  = 8\n\n"
-
         << "Ejemplo:\n"
         << "  RACORNUMALab "
-        << "--modulus 100 "
+        << "--modulus 200 "
         << "--residues 8\n";
 }
 
-void print_mode(
+void print_baseline(
     racorn_uma::filtered::
-        FilteredModeStats const& mode,
+        BridgeModeStats const& mode,
     std::size_t k
 ) {
 
@@ -288,165 +282,159 @@ void print_mode(
         << '\n';
 
     std::cout
-        << "Resultados medios   : "
-        << std::fixed
-        << std::setprecision(4)
-        << mode.mean_result_count
-        << '\n';
-
-    std::cout
         << "Distancias medias   : "
         << std::fixed
-        << std::setprecision(4)
+        << std::setprecision(2)
         << mode.mean_computed_distances
-        << '\n';
-
-    std::cout
-        << "Visitados medios    : "
-        << std::fixed
-        << std::setprecision(4)
-        << mode.mean_visited_members
         << '\n';
 
     std::cout
         << "Predicados medios   : "
         << std::fixed
-        << std::setprecision(4)
+        << std::setprecision(2)
         << mode.mean_predicate_evaluations
-        << '\n';
-
-    std::cout
-        << "Fallback medio      : "
-        << std::fixed
-        << std::setprecision(4)
-        << mode.mean_fallback_count
-        << '\n';
-
-    std::cout
-        << "Queries evaluadas   : "
-        << mode.total_query_evaluations
-        << '\n';
-
-    std::cout
-        << "Queries con fallback: "
-        << mode.queries_with_fallback
-        << '\n';
-
-    std::cout
-        << "Fraccion fallback   : "
-        << std::fixed
-        << std::setprecision(4)
-        << (
-            mode.fallback_query_fraction *
-            100.0
-        )
-        << " %\n";
-
-    if (
-        mode.queries_with_fallback >
-        0
-    ) {
-
-        std::cout
-            << "Sel. fallback media : "
-            << std::fixed
-            << std::setprecision(6)
-            << mode.mean_fallback_selectivity
-            << '\n';
-    }
-
-    std::cout
-        << "Filtro valido       : "
-        << (
-            mode
-                .all_results_satisfy_filter
-                ? "SI"
-                : "NO"
-        )
         << '\n';
 }
 
-void print_realizations(
+void print_racorn_table(
     racorn_uma::filtered::
-        FilteredSearchResult const& result
+        BridgeBudgetResult const& result
 ) {
 
     std::cout
-        << "\n[Realizaciones]\n";
+        << "\n[RACORN-1 - Bridge budget]\n\n";
 
     std::cout
-        << "idx"
-        << std::setw(10)
-        << "residuo"
+        << std::left
+        << std::setw(8)
+        << "BR"
+
+        << std::right
         << std::setw(12)
-        << "elegibles"
+        << "Recall"
+
         << std::setw(12)
-        << "sel.%"
+        << "Std"
+
+        << std::setw(12)
+        << "Min"
+
+        << std::setw(12)
+        << "Max"
+
         << std::setw(14)
-        << "HNSW-R"
+        << "Dist"
+
         << std::setw(14)
-        << "ACORN-R"
+        << "Visit"
+
         << std::setw(14)
-        << "RACORN-R"
-        << std::setw(16)
-        << "RAC-dist"
-        << std::setw(16)
-        << "RAC-fb"
+        << "Pred"
+
+        << std::setw(14)
+        << "Fallback"
+
+        << std::setw(14)
+        << "FB queries"
+
         << '\n';
 
     for (
-        auto const& realization :
-        result.realizations
+        auto const& mode :
+        result.racorn_modes
     ) {
 
         std::cout
             << std::left
-            << std::setw(3)
-            << realization
-                .realization_index
-
-            << std::right
-            << std::setw(10)
-            << realization.residue
-
-            << std::setw(12)
-            << realization
-                .eligible_count
-
-            << std::setw(12)
-            << std::fixed
-            << std::setprecision(3)
-            << (
-                realization
-                    .observed_selectivity *
-                100.0
-            )
-
-            << std::setw(14)
-            << std::fixed
-            << std::setprecision(4)
-            << realization
-                .hnsw_recall_at_k
-
-            << std::setw(14)
-            << realization
-                .acorn_recall_at_k
-
-            << std::setw(14)
-            << realization
-                .racorn_recall_at_k
-
-            << std::setw(16)
+            << std::setw(8)
             << std::fixed
             << std::setprecision(2)
-            << realization
-                .racorn_mean_distances
+            << mode.bridge_budget_ratio
 
-            << std::setw(16)
-            << realization
-                .racorn_mean_fallback_count
+            << std::right
+            << std::setw(12)
+            << std::setprecision(4)
+            << mode.mean_recall_at_k
+
+            << std::setw(12)
+            << std::setprecision(5)
+            << mode.realization_recall_stddev
+
+            << std::setw(12)
+            << std::setprecision(4)
+            << mode.min_realization_recall
+
+            << std::setw(12)
+            << mode.max_realization_recall
+
+            << std::setw(14)
+            << std::setprecision(2)
+            << mode.mean_computed_distances
+
+            << std::setw(14)
+            << mode.mean_visited_members
+
+            << std::setw(14)
+            << mode.mean_predicate_evaluations
+
+            << std::setw(14)
+            << mode.mean_fallback_count
+
+            << std::setw(13)
+            << std::setprecision(1)
+            << (
+                mode.fallback_query_fraction *
+                100.0
+            )
+            << "%"
 
             << '\n';
+    }
+}
+
+void print_efficiency(
+    racorn_uma::filtered::
+        BridgeBudgetResult const& result
+) {
+
+    std::cout
+        << "\n[Reduccion de distancias vs HNSW]\n";
+
+    for (
+        auto const& mode :
+        result.racorn_modes
+    ) {
+
+        const double ratio =
+            result.hnsw
+                .mean_computed_distances /
+            mode.mean_computed_distances;
+
+        const double reduction =
+            1.0 -
+            (
+                mode.mean_computed_distances /
+                result.hnsw
+                    .mean_computed_distances
+            );
+
+        std::cout
+            << "BR="
+            << std::fixed
+            << std::setprecision(2)
+            << mode.bridge_budget_ratio
+
+            << " -> "
+            << std::setprecision(2)
+            << ratio
+            << "x menos distancias; "
+
+            << std::setprecision(2)
+            << (
+                reduction *
+                100.0
+            )
+            << " % reduccion\n";
     }
 }
 
@@ -461,7 +449,7 @@ int main(
         BuildInfo;
 
     using racorn_uma::filtered::
-        FilteredSearchBaseline;
+        BridgeBudgetSweep;
 
     using racorn_uma::integration::
         RacornProbe;
@@ -497,7 +485,7 @@ int main(
     }
 
     const auto result =
-        FilteredSearchBaseline::run(
+        BridgeBudgetSweep::run(
             configuration.modulus,
             configuration.threshold,
             configuration.residues
@@ -506,7 +494,7 @@ int main(
     std::cout
         << "========================================\n"
         << " RACORNUMALab\n"
-        << " Gate G4C - Replicacion del filtro\n"
+        << " Gate G4D - Bridge Budget Sweep\n"
         << "========================================\n\n";
 
     std::cout
@@ -582,29 +570,26 @@ int main(
         )
         << " %\n";
 
-    print_realizations(
-        result
-    );
-
-    print_mode(
+    print_baseline(
         result.hnsw,
         result.k
     );
 
-    print_mode(
+    print_baseline(
         result.acorn,
         result.k
     );
 
-    print_mode(
-        result.racorn,
-        result.k
+    print_racorn_table(
+        result
+    );
+
+    print_efficiency(
+        result
     );
 
     std::cout
-        << "\n[Validacion]\n";
-
-    std::cout
+        << "\n[Validacion]\n"
         << "Ground truth exacto : "
         << (
             result
@@ -612,28 +597,14 @@ int main(
                 ? "OK"
                 : "FAIL"
         )
-        << '\n';
-
-    std::cout
+        << '\n'
         << "Filtros validos     : "
         << (
             result.filters_valid
                 ? "SI"
                 : "NO"
         )
-        << '\n';
-
-    std::cout
-        << "ASF RACORN observado: "
-        << (
-            result
-                .racorn_fallback_observed
-                ? "SI"
-                : "NO"
-        )
-        << '\n';
-
-    std::cout
+        << '\n'
         << "Estado experimento  : "
         << (
             result.passed
@@ -647,13 +618,13 @@ int main(
     ) {
 
         std::cerr
-            << "[G4C] FAIL\n";
+            << "[G4D] FAIL\n";
 
         return 1;
     }
 
     std::cout
-        << "[G4C] PASS\n";
+        << "[G4D] PASS\n";
 
     return 0;
 }
