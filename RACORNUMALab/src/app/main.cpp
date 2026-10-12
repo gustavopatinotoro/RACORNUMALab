@@ -3,17 +3,16 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar G-REP0 — Repeated Predicate Sanity Baseline.
+//  Ejecutar:
 //
-//  Comparación:
-//      RACORN-Cached
-//      Exact-Materialized
+//      G-REPAIR0
+//      Persistent Repair vs RACORN Transient.
 //
-//  No existe overlay persistente todavía.
+//  El mismo predicado se reutiliza en todas las queries.
 //
 
 #include "core/BuildInfo.hpp"
-#include "core/RepeatedPredicateBaseline.hpp"
+#include "core/PersistentRepairBenchmark.hpp"
 #include "integration/RacornProbe.hpp"
 #include "platform/apple/SystemInfo.hpp"
 
@@ -61,7 +60,7 @@ std::filesystem::path resolve_data_directory(
             ) {
 
                 throw std::runtime_error(
-                    "--data-dir requiere una ruta."
+                    "--data-dir requiere ruta."
                 );
             }
 
@@ -69,7 +68,7 @@ std::filesystem::path resolve_data_directory(
                 std::filesystem::path(
                     argv[
                         index +
-                            1
+                        1
                     ]
                 );
         }
@@ -95,6 +94,39 @@ std::filesystem::path resolve_data_directory(
     );
 }
 
+void print_strategy(
+    char const* name,
+    racorn_uma::core::
+        RepairLatencyStats const& stats
+) {
+
+    std::cout
+        << name
+        << '\n'
+        << "  mean/p50/p95/p99          : "
+        << std::fixed
+        << std::setprecision(4)
+        << stats.mean_ms
+        << " / "
+        << stats.p50_ms
+        << " / "
+        << stats.p95_ms
+        << " / "
+        << stats.p99_ms
+        << " ms\n"
+        << "  QPS mean                  : "
+        << std::setprecision(2)
+        << stats.qps_mean
+        << '\n'
+        << "  distances/query           : "
+        << std::setprecision(2)
+        << stats.mean_computed_distances
+        << '\n'
+        << "  visited/query             : "
+        << stats.mean_visited_members
+        << '\n';
+}
+
 } // namespace
 
 int main(
@@ -106,7 +138,7 @@ int main(
         BuildInfo;
 
     using racorn_uma::core::
-        RepeatedPredicateBaseline;
+        PersistentRepairBenchmark;
 
     using racorn_uma::integration::
         RacornProbe;
@@ -123,14 +155,15 @@ int main(
             );
 
         const auto result =
-            RepeatedPredicateBaseline::run(
+            PersistentRepairBenchmark::run(
                 data_directory
             );
 
         std::cout
             << "\n========================================\n"
             << " RACORNUMALab\n"
-            << " Gate G-REP0 - Repeated Predicate Baseline\n"
+            << " Gate G-REPAIR0\n"
+            << " Persistent vs Transient Repair\n"
             << "========================================\n\n";
 
         std::cout
@@ -161,9 +194,7 @@ int main(
             << "\n\n";
 
         std::cout
-            << "[Dataset]\n"
-            << "Dataset                     : SIFT1M\n"
-            << "Subset                      : train[0:100000]\n"
+            << "[Configuracion]\n"
             << "N                           : "
             << result.vector_count
             << '\n'
@@ -175,7 +206,31 @@ int main(
             << '\n'
             << "k                           : "
             << result.k
-            << "\n\n";
+            << '\n'
+            << "M                           : "
+            << result.connectivity
+            << '\n'
+            << "M0                          : "
+            << result.connectivity_base
+            << '\n'
+            << "efConstruction              : "
+            << result.ef_construction
+            << '\n'
+            << "efSearch RACORN             : "
+            << result.ef_search
+            << '\n'
+            << "efSearch Persistent         : "
+            << result.persistent_ef_search
+            << '\n'
+            << "BR                          : "
+            << std::fixed
+            << std::setprecision(2)
+            << result.bridge_budget_ratio
+            << '\n'
+            << "two_hop_threshold           : "
+            << result.two_hop_threshold
+            << '\n'
+            << "Exact fallback              : NO\n\n";
 
         std::cout
             << "[Predicado repetido]\n"
@@ -198,149 +253,167 @@ int main(
                 result.selectivity *
                 100.0
             )
-            << "%\n\n";
-
-        std::cout
-            << "[Representaciones persistidas]\n"
-            << "Bitset RACORN               : "
-            << result.bitset_logical_bytes
-            << " bytes\n"
-            << "Lista IDs exact logical     : "
-            << result.eligible_logical_bytes
-            << " bytes\n"
-            << "Lista IDs exact allocated   : "
-            << result.eligible_allocated_bytes
+            << "%\n"
+            << "Bitset común                : "
+            << result.predicate_bitset_bytes
             << " bytes\n\n";
 
         std::cout
-            << "[Materializacion one-shot]\n"
-            << "Muestras                    : "
-            << result.materialization_samples
+            << "[Snapshot HNSW]\n"
+            << "Serializado temporal        : "
+            << result.serialized_index_bytes
+            << " bytes\n"
+            << "L0 edges parseadas          : "
+            << result.parsed_l0_directed_edges
             << '\n'
-            << "RACORN bitset mean/p50      : "
+            << "L0 edges stats(0)           : "
+            << result.index_l0_directed_edges
+            << '\n'
+            << "Snapshot valido             : "
+            << yes_no(
+                result.topology_snapshot_valid
+            )
+            << '\n'
+            << "Snapshot time               : "
             << std::fixed
             << std::setprecision(4)
-            << result.racorn_materialization_mean_ms
-            << " / "
-            << result.racorn_materialization_p50_ms
-            << " ms\n"
-            << "Exact IDs mean/p50          : "
-            << result.exact_materialization_mean_ms
-            << " / "
-            << result.exact_materialization_p50_ms
+            << result.topology_snapshot_ms
             << " ms\n\n";
 
         std::cout
-            << "[Calidad RACORN]\n"
-            << "Mean Recall@10              : "
+            << "[Reparacion persistente]\n"
+            << "Shortcut proposal budget    : "
+            << result.shortcut_proposal_budget
+            << '\n'
+            << "Componentes inducidos       : "
+            << result.components_induced
+            << '\n'
+            << "Aristas inducidas           : "
+            << result.induced_undirected_edges
+            << '\n'
+            << "Shortcuts 2-hop añadidos    : "
+            << result.two_hop_shortcut_edges
+            << '\n'
+            << "Componentes tras 2-hop      : "
+            << result.components_after_two_hop
+            << '\n'
+            << "Edges completion            : "
+            << result.completion_edges
+            << '\n'
+            << "Componentes finales         : "
+            << result.components_final
+            << '\n'
+            << "Aristas finales             : "
+            << result.final_undirected_edges
+            << '\n'
+            << "Overlay logical             : "
+            << result.overlay_logical_bytes
+            << " bytes\n"
+            << "Overlay allocated           : "
+            << result.overlay_allocated_bytes
+            << " bytes\n"
+            << "Repair build                : "
+            << result.repair_build_ms
+            << " ms\n"
+            << "Snapshot + repair           : "
+            << result.total_persistent_build_ms
+            << " ms\n\n";
+
+        std::cout
+            << "[Calidad]\n"
+            << "RACORN-Transient Recall     : "
             << std::fixed
             << std::setprecision(4)
-            << result.mean_recall_at_k
+            << result.transient_mean_recall
+            << " | min="
+            << result.transient_min_recall
             << '\n'
-            << "Min Recall@10               : "
-            << result.min_recall_at_k
+            << "Persistent Recall           : "
+            << result.persistent_mean_recall
+            << " | min="
+            << result.persistent_min_recall
             << '\n'
-            << "Perfectas                   : "
-            << result.perfect_queries
+            << "RACORN perfectas            : "
+            << result.transient_perfect_queries
             << "/"
             << result.query_count
             << '\n'
-            << "Imperfectas                 : "
-            << result.imperfect_queries
+            << "Persistent perfectas        : "
+            << result.persistent_perfect_queries
+            << "/"
+            << result.query_count
             << '\n'
-            << "Underfill                   : "
-            << result.underfilled_queries
+            << "RACORN underfill            : "
+            << result.transient_underfilled_queries
+            << '\n'
+            << "Persistent underfill        : "
+            << result.persistent_underfilled_queries
+            << '\n'
+            << "Persistent quality admisible: "
+            << yes_no(
+                result.persistent_quality_admissible
+            )
             << "\n\n";
 
         std::cout
-            << "[Trabajo por query]\n"
-            << "RACORN distances            : "
-            << result.mean_racorn_computed_distances
+            << "[Trabajo RACORN Transient]\n"
+            << "predicate evals/query       : "
+            << result.transient_mean_predicate_evaluations
             << '\n'
-            << "RACORN visited              : "
-            << result.mean_racorn_visited_members
-            << '\n'
-            << "RACORN predicate evals      : "
-            << result.mean_racorn_predicate_evaluations
-            << '\n'
-            << "RACORN fallback             : "
-            << result.mean_racorn_fallback_count
-            << '\n'
-            << "Exact distances             : "
-            << result.exact_distance_evaluations_per_query
+            << "fallback/query              : "
+            << result.transient_mean_fallback_count
             << "\n\n";
 
         std::cout
-            << "[Latencia por query]\n"
-            << "RACORN-Cached\n"
-            << "  mean/p50/p95/p99          : "
-            << result.racorn.mean_ms
-            << " / "
-            << result.racorn.p50_ms
-            << " / "
-            << result.racorn.p95_ms
-            << " / "
-            << result.racorn.p99_ms
-            << " ms\n"
-            << "  QPS mean                  : "
-            << std::setprecision(2)
-            << result.racorn.qps_from_mean
-            << "\n\n";
+            << "[Latencia por query]\n";
+
+        print_strategy(
+            "RACORN-Transient",
+            result.transient
+        );
 
         std::cout
-            << "Exact-Materialized\n"
-            << "  mean/p50/p95/p99          : "
-            << std::setprecision(4)
-            << result.exact.mean_ms
-            << " / "
-            << result.exact.p50_ms
-            << " / "
-            << result.exact.p95_ms
-            << " / "
-            << result.exact.p99_ms
-            << " ms\n"
-            << "  QPS mean                  : "
-            << std::setprecision(2)
-            << result.exact.qps_from_mean
-            << "\n\n";
+            << '\n';
+
+        print_strategy(
+            "Persistent-Repair",
+            result.persistent
+        );
 
         std::cout
-            << "[Comparacion]\n"
-            << "Exact speedup vs RACORN     : "
+            << "\n[Amortizacion]\n"
+            << "Persistent speedup/query    : "
             << std::fixed
             << std::setprecision(3)
-            << result.exact_speedup_vs_racorn
+            << result.persistent_speedup_vs_transient
             << "x\n"
-            << "Exact query mas rapido      : "
+            << "Persistent query faster     : "
             << yes_no(
-                result.exact_query_faster
-            )
-            << '\n'
-            << "Exact build mas barato      : "
-            << yes_no(
-                result.exact_build_cheaper
+                result.persistent_query_faster
             )
             << '\n';
 
         if (
-            result.exact_break_even_exists
+            result.break_even_exists
         ) {
 
             std::cout
-                << "Break-even Exact R*         : "
-                << std::setprecision(3)
-                << result.exact_break_even_repetitions
+                << "R* repair-only              : "
+                << result.break_even_repair_only_repetitions
+                << " queries\n"
+                << "R* snapshot+repair          : "
+                << result.break_even_total_repetitions
                 << " queries\n";
 
         } else {
 
             std::cout
-                << "Break-even Exact R*         : NO EXISTE\n";
+                << "R*                          : NO EXISTE\n";
         }
 
         std::cout
-            << "\n[Coste acumulado estimado]\n"
-            << "R       RACORN(ms)      Exact(ms)       Winner\n";
+            << "\n[Coste acumulado]\n"
+            << "R       Transient(ms)   Persistent(ms)      Winner\n";
 
         for (
             auto const& point :
@@ -357,54 +430,43 @@ int main(
                 << std::setprecision(3)
 
                 << std::setw(15)
-                << point.racorn_cumulative_ms
+                << point.transient_cumulative_ms
 
-                << std::setw(15)
-                << point.exact_cumulative_ms
+                << std::setw(17)
+                << point.persistent_cumulative_ms
 
-                << "       "
+                << "      "
                 << point.winner
                 << '\n';
         }
 
         std::cout
-            << "\n[Validacion]\n"
-            << "Representation mismatches   : "
-            << result.representation_mismatches
-            << '\n'
-            << "Exact/reference mismatches  : "
-            << result.exact_reference_mismatch_queries
-            << '\n'
-            << "RACORN filter-invalid       : "
-            << result.invalid_racorn_result_queries
-            << '\n'
+            << "\n[Validez]\n"
             << "Ground truth completo       : "
             << yes_no(
                 result.ground_truth_complete
             )
             << '\n'
-            << "Exact implementation valida : "
+            << "Overlay conectado           : "
             << yes_no(
-                result.exact_implementation_valid
+                result.overlay_connected
             )
             << '\n'
-            << "Materializacion valida      : "
-            << yes_no(
-                result.predicate_materialization_valid
-            )
+            << "Transient invalid results   : "
+            << result.invalid_transient_results
             << '\n'
-            << "RACORN filter valido        : "
-            << yes_no(
-                result.racorn_results_filter_valid
-            )
+            << "Persistent invalid results  : "
+            << result.invalid_persistent_results
             << "\n\n";
 
         std::cout
             << "[Invariantes]\n"
-            << "Predicado por query         : NO\n"
-            << "Bitset recalculado/query    : NO\n"
-            << "IDs recalculados/query      : NO\n"
-            << "HNSW dentro del timing      : NO\n"
+            << "Mismo predicado             : SI\n"
+            << "Predicado recalculado/query : NO\n"
+            << "RACORN reparación/query     : SI\n"
+            << "Persistent repair/query     : NO\n"
+            << "HNSW modificado             : NO\n"
+            << "Vectores duplicados         : NO\n"
             << "Metal                       : NO\n"
             << "RACORN modificado           : "
             << yes_no(
@@ -412,18 +474,25 @@ int main(
             )
             << "\n\n";
 
+        std::cout
+            << "========================================\n"
+            << " DECISION: "
+            << result.decision
+            << '\n'
+            << "========================================\n\n";
+
         if (
             !result.valid
         ) {
 
             std::cerr
-                << "[G-REP0] FAIL\n";
+                << "[G-REPAIR0] FAIL\n";
 
             return 1;
         }
 
         std::cout
-            << "[G-REP0] PASS\n";
+            << "[G-REPAIR0] PASS\n";
 
         return 0;
 
@@ -432,7 +501,7 @@ int main(
     ) {
 
         std::cerr
-            << "\n[G-REP0] FAIL: "
+            << "\n[G-REPAIR0] FAIL: "
             << error.what()
             << '\n';
 
