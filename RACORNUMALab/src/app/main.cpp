@@ -3,36 +3,39 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar G-UMA2 y verificar equivalencia exacta entre un predicado
-//  de metadatos evaluado por CPU y el mismo predicado evaluado mediante
-//  GPU Metal.
+//  Ejecutar G-UMA3 y verificar la compactación GPU de una máscara
+//  de elegibilidad hacia un bitset directamente consultable por CPU.
 //
 //  Gate:
-//  G-UMA2 — Predicate Engine Metal.
+//  G-UMA3 — Compactación GPU a bitset UMA.
 //
-//  Restricción arquitectónica principal:
+//  Objetivo:
+//  Demostrar:
+//
+//      1 byte/vector
+//          ↓
+//      GPU Metal
+//          ↓
+//      1 bit/vector
+//
+//  manteniendo equivalencia exacta.
+//
+//  Restricción arquitectónica:
 //
 //      RACORN CPU permanece completamente intacto.
 //
-//  Este Gate todavía no conecta la máscara GPU con RACORN.
+//  Este Gate todavía no conecta el bitset con RACORN.
 //
 //  Condición PASS:
-//  - Metal disponible.
-//  - UMA disponible.
-//  - Buffers Shared válidos.
-//  - Kernel Metal ejecutado.
-//  - Todos los valores GPU pertenecen a {0,1}.
-//  - CPU y GPU seleccionan exactamente los mismos IDs.
-//  - Cero diferencias en 1.048.576 registros.
-//
-//  Nota:
-//  La máscara utiliza un byte por vector.
-//  La compactación a bitset pertenece a G-UMA3.
+//  - GPU completa el kernel.
+//  - Cero diferencias por palabra.
+//  - Cero diferencias por bit.
+//  - Misma cardinalidad antes y después de compactar.
 //
 
 #include "core/BuildInfo.hpp"
 #include "integration/RacornProbe.hpp"
-#include "platform/apple/PredicateEngineProbe.hpp"
+#include "platform/apple/BitsetCompactionProbe.hpp"
 #include "platform/apple/SystemInfo.hpp"
 
 #include <cstddef>
@@ -42,6 +45,17 @@
 #include <limits>
 
 namespace {
+
+double bytes_to_kib(
+    std::uint64_t bytes
+) noexcept {
+
+    return
+        static_cast<double>(
+            bytes
+        ) /
+        1024.0;
+}
 
 double bytes_to_mib(
     std::uint64_t bytes
@@ -78,18 +92,18 @@ int main() {
         RacornProbe;
 
     using racorn_uma::platform::apple::
-        PredicateEngineProbe;
+        BitsetCompactionProbe;
 
     using racorn_uma::platform::apple::
         SystemInfo;
 
     const auto result =
-        PredicateEngineProbe::run();
+        BitsetCompactionProbe::run();
 
     std::cout
         << "========================================\n"
         << " RACORNUMALab\n"
-        << " Gate G-UMA2 - Predicate Engine Metal\n"
+        << " Gate G-UMA3 - GPU Bitset Compaction\n"
         << "========================================\n\n";
 
     std::cout
@@ -134,7 +148,7 @@ int main() {
         << "\n\n";
 
     std::cout
-        << "[Predicate Engine]\n";
+        << "[Metal]\n";
 
     std::cout
         << "Metal disponible         : "
@@ -182,23 +196,16 @@ int main() {
         << '\n';
 
     std::cout
-        << "Command Queue            : "
-        << yes_no(
-            result.command_queue_available
-        )
-        << '\n';
-
-    std::cout
-        << "Metadata Shared          : "
-        << yes_no(
-            result.metadata_buffer_available
-        )
-        << '\n';
-
-    std::cout
         << "Mask Shared              : "
         << yes_no(
             result.mask_buffer_available
+        )
+        << '\n';
+
+    std::cout
+        << "Bitset Shared            : "
+        << yes_no(
+            result.bitset_buffer_available
         )
         << '\n';
 
@@ -210,53 +217,53 @@ int main() {
         << "\n\n";
 
     std::cout
-        << "[Metadata]\n";
+        << "[Representacion]\n";
 
     std::cout
-        << "Registros                : "
+        << "Vectores                 : "
         << result.element_count
         << '\n';
 
     std::cout
-        << "Columnas                 : "
-        << result.metadata_column_count
-        << '\n';
-
-    std::cout
-        << "Metadata buffer          : "
-        << std::fixed
-        << std::setprecision(2)
-        << bytes_to_mib(
-            result.metadata_bytes
-        )
-        << " MiB\n";
-
-    std::cout
-        << "Eligibility mask         : "
+        << "Mascara byte/vector      : "
         << std::fixed
         << std::setprecision(2)
         << bytes_to_mib(
             result.mask_bytes
         )
-        << " MiB\n\n";
+        << " MiB\n";
 
     std::cout
-        << "[Filtro]\n";
+        << "Palabras bitset          : "
+        << result.bitset_word_count
+        << '\n';
 
     std::cout
-        << "tenant_id                : == 7\n";
+        << "Bitset 1 bit/vector      : "
+        << std::fixed
+        << std::setprecision(2)
+        << bytes_to_kib(
+            result.bitset_bytes
+        )
+        << " KiB\n";
 
     std::cout
-        << "year                     : >= 2022\n";
+        << "Factor de compactacion   : "
+        << std::fixed
+        << std::setprecision(2)
+        << result.compression_ratio
+        << "x\n";
 
     std::cout
-        << "language                 : == 2\n";
-
-    std::cout
-        << "category                 : IN {3,7,9}\n";
-
-    std::cout
-        << "security_level           : <= 2\n\n";
+        << "Reduccion almacenamiento : "
+        << std::fixed
+        << std::setprecision(2)
+        << (
+            result
+                .storage_reduction_fraction *
+            100.0
+        )
+        << " %\n\n";
 
     std::cout
         << "[Dispatch]\n";
@@ -278,9 +285,15 @@ int main() {
         << '\n';
 
     std::cout
-        << "Hilos logicos GPU        : "
-        << result.element_count
+        << "Hilos GPU                : "
+        << result.bitset_word_count
         << '\n';
+
+    std::cout
+        << "Bytes procesados/hilo    : 32\n";
+
+    std::cout
+        << "Bits producidos/hilo     : 32\n";
 
     std::cout
         << "Dispatches GPU           : 1\n";
@@ -295,55 +308,88 @@ int main() {
         << "Barreras threadgroup     : 0\n\n";
 
     std::cout
-        << "[Resultado del filtro]\n";
+        << "[Cardinalidad]\n";
 
     std::cout
-        << "Seleccionados CPU        : "
+        << "Seleccionados mascara    : "
         << result.cpu_selected_count
         << '\n';
 
     std::cout
-        << "Seleccionados GPU        : "
-        << result.gpu_selected_count
+        << "Seleccionados bitset     : "
+        << result.bitset_selected_count
+        << "\n\n";
+
+    std::cout
+        << "[Verificacion exacta]\n";
+
+    std::cout
+        << "Palabras verificadas     : "
+        << result.bitset_word_count
         << '\n';
 
     std::cout
-        << "Selectividad observada   : "
-        << std::fixed
-        << std::setprecision(6)
-        << (
-            result.observed_selectivity *
-            100.0
+        << "Palabras diferentes      : "
+        << result.word_mismatch_count
+        << '\n';
+
+    std::cout
+        << "Coincidencia palabras    : "
+        << yes_no(
+            result.exact_word_match
         )
-        << " %\n\n";
+        << '\n';
 
     std::cout
-        << "[Verificacion semantica]\n";
-
-    std::cout
-        << "Registros verificados    : "
+        << "Bits logicos verificados : "
         << result.element_count
         << '\n';
 
     std::cout
-        << "Valores mask invalidos   : "
-        << result.invalid_mask_value_count
+        << "Bits diferentes          : "
+        << result.bit_mismatch_count
         << '\n';
 
     std::cout
-        << "Diferencias CPU/GPU      : "
-        << result.mismatch_count
-        << '\n';
-
-    std::cout
-        << "Coincidencia exacta      : "
+        << "Coincidencia bits        : "
         << yes_no(
-            result.exact_match
+            result.exact_bit_match
         )
         << '\n';
 
     if (
-        result.mismatch_count >
+        result.word_mismatch_count >
+            0 &&
+        result.first_mismatch_word !=
+            std::numeric_limits<
+                std::size_t
+            >::max()
+    ) {
+
+        std::cout
+            << "Primer word mismatch     : "
+            << result.first_mismatch_word
+            << '\n';
+
+        std::cout
+            << "Word esperado            : 0x"
+            << std::hex
+            << std::uppercase
+            << result
+                .first_mismatch_expected_word
+            << '\n';
+
+        std::cout
+            << "Word observado           : 0x"
+            << result
+                .first_mismatch_observed_word
+            << std::dec
+            << std::nouppercase
+            << '\n';
+    }
+
+    if (
+        result.bit_mismatch_count >
             0 &&
         result.first_mismatch_index !=
             std::numeric_limits<
@@ -352,21 +398,23 @@ int main() {
     ) {
 
         std::cout
-            << "Primer mismatch indice   : "
+            << "Primer bit mismatch idx  : "
             << result.first_mismatch_index
             << '\n';
 
         std::cout
-            << "Esperado                 : "
+            << "Bit esperado             : "
             << static_cast<unsigned>(
-                result.first_mismatch_expected
+                result
+                    .first_mismatch_expected_bit
             )
             << '\n';
 
         std::cout
-            << "Observado                : "
+            << "Bit observado            : "
             << static_cast<unsigned>(
-                result.first_mismatch_observed
+                result
+                    .first_mismatch_observed_bit
             )
             << '\n';
     }
@@ -391,19 +439,16 @@ int main() {
         << "HNSW ejecutado           : NO\n";
 
     std::cout
-        << "Navegacion GPU           : NO\n";
+        << "Predicate GPU ejecutado  : NO\n";
 
     std::cout
-        << "Predicate CPU            : SI\n";
+        << "Compactacion GPU         : SI\n";
 
     std::cout
-        << "Predicate GPU            : SI\n";
+        << "Bitset Shared            : SI\n";
 
     std::cout
-        << "Metadata Shared          : SI\n";
-
-    std::cout
-        << "Resultado Shared         : SI\n";
+        << "Atomics                  : NO\n";
 
     std::cout
         << "Copia explicita a VRAM   : NO\n\n";
@@ -413,13 +458,13 @@ int main() {
     ) {
 
         std::cerr
-            << "[G-UMA2] FAIL\n";
+            << "[G-UMA3] FAIL\n";
 
         return 1;
     }
 
     std::cout
-        << "[G-UMA2] PASS\n";
+        << "[G-UMA3] PASS\n";
 
     return 0;
 }
