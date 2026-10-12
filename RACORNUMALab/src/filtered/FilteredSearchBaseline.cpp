@@ -3,71 +3,79 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar un experimento controlado de búsqueda vectorial filtrada
-//  comparando tres rutas del mismo índice:
+//  Ejecutar múltiples realizaciones de un filtro con selectividad
+//  aproximadamente constante sobre exactamente el mismo índice HNSW,
+//  comparando:
 //
 //      1. HNSW con in-filtering.
 //      2. ACORN-1.
 //      3. RACORN-1.
 //
 //  Gate:
-//  G4B — Barrido controlado de selectividad.
+//  G4C — Replicación topológica del filtro.
+//
+//  Motivación:
+//  G4B mostró que el Recall de ACORN no es perfectamente monótono
+//  respecto de la selectividad. Esa observación impide interpretar
+//  una única realización del filtro como un umbral universal.
+//
+//  Este Gate separa:
+//
+//      efecto de selectividad
+//
+//  de:
+//
+//      efecto de la realización concreta del filtro sobre el grafo.
 //
 //  Dataset:
-//  - Sintético.
-//  - Determinista.
 //  - 20.000 vectores.
 //  - 32 dimensiones.
-//  - Valores pseudoaleatorios reproducibles.
+//  - Pseudoaleatorio determinista.
 //
 //  Consultas:
-//  - 32.
-//  - Independientes del dataset.
-//  - Pseudoaleatorias y reproducibles.
+//  - 32 consultas.
+//  - Pseudoaleatorias deterministas.
+//  - Independientes de los vectores base.
 //
-//  Filtro:
-//      (key % modulus) < threshold
+//  Predicado:
+//  Para residue = r:
 //
-//  Ejemplos con threshold = 1:
+//      shifted_residue(key, r) < threshold
 //
-//      modulus = 10    -> 10.00 %
-//      modulus = 20    ->  5.00 %
-//      modulus = 50    ->  2.00 %
-//      modulus = 100   ->  1.00 %
-//      modulus = 200   ->  0.50 %
-//      modulus = 400   ->  0.25 %
-//      modulus = 1000  ->  0.10 %
+//  Con threshold = 1 equivale a:
+//
+//      key % modulus == r
+//
+//  Los residuos utilizados se distribuyen de forma aproximadamente
+//  uniforme sobre [0, modulus).
 //
 //  Ground truth:
 //  Búsqueda exacta filtrada del propio index_gt.
 //
-//  Condiciones RACORN:
+//  RACORN:
 //  - two_hop_threshold = 0.30.
 //  - bridge_budget_ratio = 1.0.
-//  - stride sampling activado.
-//  - 3-hop desactivado.
-//  - exact fallback desactivado.
+//  - stride sampling = true.
+//  - 3-hop = desactivado.
+//  - exact fallback = desactivado.
 //
-//  Interpretación:
-//  Este Gate pretende localizar empíricamente:
-//
-//      - La región donde ACORN comienza a perder conectividad.
-//      - La región donde RACORN activa Adaptive Search Fallback.
-//      - La capacidad de RACORN para recuperar recall.
-//      - El coste de dicha recuperación.
+//  Estadística:
+//  La desviación estándar reportada entre realizaciones utiliza la
+//  definición poblacional sobre el conjunto determinista de residuos
+//  evaluados en este Gate.
 //
 //  Invariantes:
-//  - Las tres rutas usan exactamente el mismo índice.
-//  - Las tres rutas usan exactamente las mismas consultas.
-//  - Las tres rutas usan exactamente el mismo predicado.
-//  - No se reconstruye el índice entre modos.
-//  - Un único hilo.
+//  - El índice se construye una sola vez.
+//  - Las consultas se generan una sola vez.
+//  - No se modifica la topología entre realizaciones.
+//  - No se modifica RACORN upstream.
+//  - No se mide latencia en este Gate.
+//  - No se mide memoria en este Gate.
 //
 //  Seguridad:
 //  - Sin red.
-//  - Sin archivos.
-//  - Sin estado externo.
-//  - Sin modificaciones de código vendorizado.
+//  - Sin archivos externos.
+//  - Sin estado persistente.
 //
 
 #include "filtered/FilteredSearchBaseline.hpp"
@@ -75,6 +83,7 @@
 #include <usearch/index.hpp>
 #include <usearch/index_plugins.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -117,9 +126,6 @@ using Index =
 
 //
 // Generador determinista SplitMix64.
-//
-// No se utiliza std::random_device. El experimento debe producir
-// exactamente los mismos datos en ejecuciones sucesivas.
 //
 
 std::uint64_t splitmix64(
@@ -168,7 +174,7 @@ float random_signed_float(
 }
 
 //
-// Almacén de vectores base.
+// Almacén de vectores.
 //
 
 class VectorStore final {
@@ -213,11 +219,12 @@ public:
 private:
 
     std::size_t dimensions_{};
+
     std::vector<float> data_;
 };
 
 //
-// Almacén independiente de consultas.
+// Almacén de consultas.
 //
 
 class QueryStore final {
@@ -262,14 +269,12 @@ public:
 private:
 
     std::size_t dimensions_{};
+
     std::vector<float> data_;
 };
 
 //
-// Métrica L2² requerida por index_gt.
-//
-// La raíz cuadrada no es necesaria porque L2² conserva el orden
-// relativo de las distancias.
+// Métrica L2 al cuadrado.
 //
 
 struct L2Metric final {
@@ -283,6 +288,7 @@ struct L2Metric final {
         typename IndexType::member_citerator_t;
 
     VectorStore const* store{};
+
     std::size_t dimensions{};
 
     [[nodiscard]]
@@ -360,8 +366,7 @@ struct L2Metric final {
 };
 
 //
-// Wrapper RAII para respetar el alineamiento utilizado por
-// la implementación oficial RACORN/USEARCH.
+// Wrapper RAII alineado para index_gt.
 //
 
 template <typename IndexType>
@@ -420,16 +425,48 @@ private:
 };
 
 //
-// Predicado de metadata.
+// Predicado desplazable.
 //
-// La parametrización permite ejecutar diferentes selectividades
-// sin modificar ni recompilar la lógica del experimento.
+// El campo residue define el inicio de la ventana residual.
+//
+// Para threshold = 1:
+//
+//      accepts_key(key)
+//
+// equivale a:
+//
+//      key % modulus == residue
 //
 
 struct MetadataPredicate final {
 
     std::size_t modulus{};
+
     std::size_t threshold{};
+
+    std::size_t residue{};
+
+    [[nodiscard]]
+    bool accepts_key(
+        std::size_t key
+    ) const noexcept {
+
+        const std::size_t key_residue =
+            key % modulus;
+
+        const std::size_t start =
+            residue % modulus;
+
+        const std::size_t shifted =
+            key_residue >= start
+                ? key_residue - start
+                : modulus -
+                    (start - key_residue);
+
+        return
+            shifted <
+            threshold;
+    }
 
     template <typename MemberLike>
     bool operator()(
@@ -437,30 +474,13 @@ struct MetadataPredicate final {
     ) const noexcept {
 
         return
-            (
-                get_key(member) %
-                modulus
-            ) <
-            threshold;
-    }
-
-    [[nodiscard]]
-    bool accepts_key(
-        std::size_t key
-    ) const noexcept {
-
-        return
-            (
-                key %
-                modulus
-            ) <
-            threshold;
+            accepts_key(
+                static_cast<std::size_t>(
+                    get_key(member)
+                )
+            );
     }
 };
-
-//
-// Convierte un search_result_t en una lista simple de keys.
-//
 
 template <typename SearchResult>
 std::vector<std::size_t>
@@ -490,12 +510,6 @@ extract_keys(
     return keys;
 }
 
-//
-// Recall@k basado en pertenencia al conjunto ground truth.
-//
-// El orden relativo dentro del top-k no altera Recall@k.
-//
-
 double recall_at_k(
     std::vector<std::size_t> const& approximate,
     std::vector<std::size_t> const& exact
@@ -511,14 +525,20 @@ double recall_at_k(
             exact.end()
         );
 
-    std::size_t hits = 0;
+    std::size_t hits =
+        0;
 
     for (
         std::size_t key :
         approximate
     ) {
 
-        if (truth.contains(key)) {
+        if (
+            truth.contains(
+                key
+            )
+        ) {
+
             ++hits;
         }
     }
@@ -529,11 +549,6 @@ double recall_at_k(
             exact.size()
         );
 }
-
-//
-// Verifica el contrato de búsqueda filtrada:
-// ningún resultado retornado puede violar el predicado.
-//
 
 bool filter_is_valid(
     std::vector<std::size_t> const& keys,
@@ -563,23 +578,6 @@ enum class SearchMode {
     acorn,
     racorn
 };
-
-//
-// Construye la configuración de búsqueda para cada algoritmo.
-//
-// HNSW:
-//     two_hop_threshold < 0.
-//
-// ACORN-1:
-//     two_hop_threshold >= 0,
-//     racorn = false.
-//
-// RACORN-1:
-//     two_hop_threshold >= 0,
-//     racorn = true.
-//
-// 3-hop y RACORN-1+ permanecen desactivados.
-//
 
 index_search_config_t
 make_search_config(
@@ -642,17 +640,18 @@ make_search_config(
     return config;
 }
 
-//
-// Acumulador interno de métricas.
-//
-
 struct Accumulator final {
 
     double recall_sum{};
+
     double result_count_sum{};
+
     double computed_distances_sum{};
+
     double visited_members_sum{};
+
     double predicate_evaluations_sum{};
+
     double fallback_count_sum{};
 
     double fallback_selectivity_sum{};
@@ -663,12 +662,12 @@ struct Accumulator final {
     std::size_t
         queries_with_fallback{};
 
-    bool filter_valid = true;
-};
+    std::size_t
+        samples{};
 
-//
-// Acumula métricas de una única consulta.
-//
+    bool filter_valid =
+        true;
+};
 
 void accumulate(
     Accumulator& accumulator,
@@ -739,58 +738,156 @@ void accumulate(
             keys,
             predicate
         );
+
+    ++accumulator.samples;
 }
 
-//
-// Convierte el acumulador a estadísticas medias.
-//
+double accumulator_mean_recall(
+    Accumulator const& accumulator
+) noexcept {
+
+    if (
+        accumulator.samples ==
+        0
+    ) {
+
+        return 0.0;
+    }
+
+    return
+        accumulator.recall_sum /
+        static_cast<double>(
+            accumulator.samples
+        );
+}
+
+double population_stddev(
+    std::vector<double> const& values
+) {
+
+    if (
+        values.empty()
+    ) {
+
+        return 0.0;
+    }
+
+    double mean =
+        0.0;
+
+    for (
+        double value :
+        values
+    ) {
+
+        mean +=
+            value;
+    }
+
+    mean /=
+        static_cast<double>(
+            values.size()
+        );
+
+    double squared_error_sum =
+        0.0;
+
+    for (
+        double value :
+        values
+    ) {
+
+        const double error =
+            value -
+            mean;
+
+        squared_error_sum +=
+            error *
+            error;
+    }
+
+    return
+        std::sqrt(
+            squared_error_sum /
+            static_cast<double>(
+                values.size()
+            )
+        );
+}
 
 FilteredModeStats finish_stats(
     char const* name,
-    Accumulator const& accumulator
+    Accumulator const& accumulator,
+    std::vector<double> const&
+        realization_recalls
 ) {
-
-    const double query_count =
-        static_cast<double>(
-            kQueryCount
-        );
 
     FilteredModeStats stats;
 
     stats.name =
         name;
 
-    stats.mean_recall_at_k =
-        accumulator.recall_sum /
-        query_count;
+    if (
+        accumulator.samples >
+        0
+    ) {
 
-    stats.mean_result_count =
-        accumulator.result_count_sum /
-        query_count;
+        const double samples =
+            static_cast<double>(
+                accumulator.samples
+            );
 
-    stats.mean_computed_distances =
-        accumulator
-            .computed_distances_sum /
-        query_count;
+        stats.mean_recall_at_k =
+            accumulator.recall_sum /
+            samples;
 
-    stats.mean_visited_members =
-        accumulator
-            .visited_members_sum /
-        query_count;
+        stats.mean_result_count =
+            accumulator
+                .result_count_sum /
+            samples;
 
-    stats.mean_predicate_evaluations =
-        accumulator
-            .predicate_evaluations_sum /
-        query_count;
+        stats.mean_computed_distances =
+            accumulator
+                .computed_distances_sum /
+            samples;
 
-    stats.mean_fallback_count =
-        accumulator
-            .fallback_count_sum /
-        query_count;
+        stats.mean_visited_members =
+            accumulator
+                .visited_members_sum /
+            samples;
+
+        stats.mean_predicate_evaluations =
+            accumulator
+                .predicate_evaluations_sum /
+            samples;
+
+        stats.mean_fallback_count =
+            accumulator
+                .fallback_count_sum /
+            samples;
+    }
+
+    stats.total_query_evaluations =
+        accumulator.samples;
 
     stats.queries_with_fallback =
         accumulator
             .queries_with_fallback;
+
+    if (
+        accumulator.samples >
+        0
+    ) {
+
+        stats.fallback_query_fraction =
+            static_cast<double>(
+                accumulator
+                    .queries_with_fallback
+            ) /
+            static_cast<double>(
+                accumulator.samples
+            );
+    }
 
     if (
         accumulator
@@ -805,6 +902,7 @@ FilteredModeStats finish_stats(
                 accumulator
                     .fallback_selectivity_samples
             );
+
     } else {
 
         stats.mean_fallback_selectivity =
@@ -813,10 +911,79 @@ FilteredModeStats finish_stats(
             >::quiet_NaN();
     }
 
+    stats.realization_recall_stddev =
+        population_stddev(
+            realization_recalls
+        );
+
+    if (
+        !realization_recalls.empty()
+    ) {
+
+        const auto minmax =
+            std::minmax_element(
+                realization_recalls.begin(),
+                realization_recalls.end()
+            );
+
+        stats.min_realization_recall =
+            *minmax.first;
+
+        stats.max_realization_recall =
+            *minmax.second;
+    }
+
     stats.all_results_satisfy_filter =
         accumulator.filter_valid;
 
     return stats;
+}
+
+std::size_t count_eligible(
+    MetadataPredicate const& predicate
+) noexcept {
+
+    std::size_t count =
+        0;
+
+    for (
+        std::size_t key = 0;
+        key < kVectorCount;
+        ++key
+    ) {
+
+        if (
+            predicate.accepts_key(
+                key
+            )
+        ) {
+
+            ++count;
+        }
+    }
+
+    return count;
+}
+
+std::size_t distributed_residue(
+    std::size_t realization_index,
+    std::size_t realization_count,
+    std::size_t modulus
+) noexcept {
+
+    if (
+        realization_count <= 1
+    ) {
+
+        return 0;
+    }
+
+    return
+        (
+            realization_index *
+            modulus
+        ) /
+        realization_count;
 }
 
 } // namespace
@@ -824,31 +991,29 @@ FilteredModeStats finish_stats(
 FilteredSearchResult
 FilteredSearchBaseline::run(
     std::size_t filter_modulus,
-    std::size_t filter_threshold
+    std::size_t filter_threshold,
+    std::size_t requested_realization_count
 ) {
 
     FilteredSearchResult output;
-
-    //
-    // Validación defensiva.
-    //
 
     if (
         filter_modulus == 0 ||
         filter_threshold == 0 ||
         filter_threshold >
-            filter_modulus
+            filter_modulus ||
+        requested_realization_count ==
+            0
     ) {
-
-        output.passed =
-            false;
 
         return output;
     }
 
-    //
-    // Dataset reproducible.
-    //
+    const std::size_t realization_count =
+        std::min(
+            requested_realization_count,
+            filter_modulus
+        );
 
     VectorStore base(
         kVectorCount,
@@ -866,11 +1031,6 @@ FilteredSearchBaseline::run(
         .store = &base,
         .dimensions = kDimensions
     };
-
-    //
-    // Construcción del único índice utilizado por todo
-    // el experimento.
-    //
 
     index_config_t
         index_configuration(
@@ -915,197 +1075,372 @@ FilteredSearchBaseline::run(
         );
     }
 
-    const MetadataPredicate predicate{
-        .modulus =
-            filter_modulus,
+    Accumulator
+        global_hnsw;
 
-        .threshold =
-            filter_threshold
-    };
+    Accumulator
+        global_acorn;
 
-    Accumulator hnsw_accumulator;
-    Accumulator acorn_accumulator;
-    Accumulator racorn_accumulator;
+    Accumulator
+        global_racorn;
+
+    std::vector<double>
+        hnsw_realization_recalls;
+
+    std::vector<double>
+        acorn_realization_recalls;
+
+    std::vector<double>
+        racorn_realization_recalls;
+
+    hnsw_realization_recalls.reserve(
+        realization_count
+    );
+
+    acorn_realization_recalls.reserve(
+        realization_count
+    );
+
+    racorn_realization_recalls.reserve(
+        realization_count
+    );
+
+    output.realizations.reserve(
+        realization_count
+    );
 
     bool exact_complete =
         true;
 
-    //
-    // Todas las rutas se evalúan consulta por consulta
-    // contra exactamente el mismo ground truth.
-    //
+    std::size_t min_eligible =
+        std::numeric_limits<
+            std::size_t
+        >::max();
+
+    std::size_t max_eligible =
+        0;
 
     for (
-        std::size_t query_index = 0;
-        query_index < kQueryCount;
-        ++query_index
+        std::size_t realization_index = 0;
+        realization_index <
+            realization_count;
+        ++realization_index
     ) {
 
-        float const* query =
-            queries.row(
-                query_index
+        const std::size_t residue =
+            distributed_residue(
+                realization_index,
+                realization_count,
+                filter_modulus
             );
 
-        //
-        // Ground truth exacto filtrado.
-        //
+        const MetadataPredicate predicate{
+            .modulus =
+                filter_modulus,
 
-        index_search_config_t
-            exact_config;
+            .threshold =
+                filter_threshold,
 
-        exact_config.exact =
-            true;
+            .residue =
+                residue
+        };
 
-        exact_config.thread =
-            0;
-
-        auto exact_result =
-            index.search(
-                query,
-                kNeighbors,
-                metric,
-                exact_config,
+        const std::size_t eligible_count =
+            count_eligible(
                 predicate
             );
 
-        const auto exact_keys =
-            extract_keys(
-                exact_result
+        min_eligible =
+            std::min(
+                min_eligible,
+                eligible_count
+            );
+
+        max_eligible =
+            std::max(
+                max_eligible,
+                eligible_count
             );
 
         if (
-            exact_keys.size() !=
-                kNeighbors ||
-            !filter_is_valid(
-                exact_keys,
-                predicate
-            )
+            eligible_count <
+            kNeighbors
         ) {
 
             exact_complete =
                 false;
         }
 
-        //
-        // HNSW filtrado.
-        //
+        Accumulator
+            local_hnsw;
 
-        auto hnsw_config =
-            make_search_config(
-                SearchMode::hnsw
-            );
+        Accumulator
+            local_acorn;
 
-        auto hnsw_result =
-            index.search(
-                query,
-                kNeighbors,
-                metric,
-                hnsw_config,
-                predicate
-            );
+        Accumulator
+            local_racorn;
 
-        const auto hnsw_keys =
-            extract_keys(
-                hnsw_result
-            );
-
-        accumulate(
-            hnsw_accumulator,
-            hnsw_keys,
-            exact_keys,
-            hnsw_result,
-            predicate
-        );
-
-        //
-        // ACORN-1.
-        //
-
-        auto acorn_config =
-            make_search_config(
-                SearchMode::acorn
-            );
-
-        auto acorn_result =
-            index.search(
-                query,
-                kNeighbors,
-                metric,
-                acorn_config,
-                predicate
-            );
-
-        const auto acorn_keys =
-            extract_keys(
-                acorn_result
-            );
-
-        accumulate(
-            acorn_accumulator,
-            acorn_keys,
-            exact_keys,
-            acorn_result,
-            predicate
-        );
-
-        //
-        // RACORN-1.
-        //
-
-        auto racorn_config =
-            make_search_config(
-                SearchMode::racorn
-            );
-
-        auto racorn_result =
-            index.search(
-                query,
-                kNeighbors,
-                metric,
-                racorn_config,
-                predicate
-            );
-
-        const auto racorn_keys =
-            extract_keys(
-                racorn_result
-            );
-
-        accumulate(
-            racorn_accumulator,
-            racorn_keys,
-            exact_keys,
-            racorn_result,
-            predicate
-        );
-    }
-
-    //
-    // Selectividad observada real.
-    //
-
-    std::size_t eligible_count =
-        0;
-
-    for (
-        std::size_t key = 0;
-        key < kVectorCount;
-        ++key
-    ) {
-
-        if (
-            predicate.accepts_key(
-                key
-            )
+        for (
+            std::size_t query_index = 0;
+            query_index <
+                kQueryCount;
+            ++query_index
         ) {
 
-            ++eligible_count;
-        }
-    }
+            float const* query =
+                queries.row(
+                    query_index
+                );
 
-    //
-    // Resultado final.
-    //
+            //
+            // Ground truth exacto.
+            //
+
+            index_search_config_t
+                exact_config;
+
+            exact_config.exact =
+                true;
+
+            exact_config.thread =
+                0;
+
+            auto exact_result =
+                index.search(
+                    query,
+                    kNeighbors,
+                    metric,
+                    exact_config,
+                    predicate
+                );
+
+            const auto exact_keys =
+                extract_keys(
+                    exact_result
+                );
+
+            if (
+                exact_keys.size() !=
+                    kNeighbors ||
+                !filter_is_valid(
+                    exact_keys,
+                    predicate
+                )
+            ) {
+
+                exact_complete =
+                    false;
+            }
+
+            //
+            // HNSW filtrado.
+            //
+
+            auto hnsw_config =
+                make_search_config(
+                    SearchMode::hnsw
+                );
+
+            auto hnsw_result =
+                index.search(
+                    query,
+                    kNeighbors,
+                    metric,
+                    hnsw_config,
+                    predicate
+                );
+
+            const auto hnsw_keys =
+                extract_keys(
+                    hnsw_result
+                );
+
+            accumulate(
+                local_hnsw,
+                hnsw_keys,
+                exact_keys,
+                hnsw_result,
+                predicate
+            );
+
+            accumulate(
+                global_hnsw,
+                hnsw_keys,
+                exact_keys,
+                hnsw_result,
+                predicate
+            );
+
+            //
+            // ACORN-1.
+            //
+
+            auto acorn_config =
+                make_search_config(
+                    SearchMode::acorn
+                );
+
+            auto acorn_result =
+                index.search(
+                    query,
+                    kNeighbors,
+                    metric,
+                    acorn_config,
+                    predicate
+                );
+
+            const auto acorn_keys =
+                extract_keys(
+                    acorn_result
+                );
+
+            accumulate(
+                local_acorn,
+                acorn_keys,
+                exact_keys,
+                acorn_result,
+                predicate
+            );
+
+            accumulate(
+                global_acorn,
+                acorn_keys,
+                exact_keys,
+                acorn_result,
+                predicate
+            );
+
+            //
+            // RACORN-1.
+            //
+
+            auto racorn_config =
+                make_search_config(
+                    SearchMode::racorn
+                );
+
+            auto racorn_result =
+                index.search(
+                    query,
+                    kNeighbors,
+                    metric,
+                    racorn_config,
+                    predicate
+                );
+
+            const auto racorn_keys =
+                extract_keys(
+                    racorn_result
+                );
+
+            accumulate(
+                local_racorn,
+                racorn_keys,
+                exact_keys,
+                racorn_result,
+                predicate
+            );
+
+            accumulate(
+                global_racorn,
+                racorn_keys,
+                exact_keys,
+                racorn_result,
+                predicate
+            );
+        }
+
+        const double hnsw_recall =
+            accumulator_mean_recall(
+                local_hnsw
+            );
+
+        const double acorn_recall =
+            accumulator_mean_recall(
+                local_acorn
+            );
+
+        const double racorn_recall =
+            accumulator_mean_recall(
+                local_racorn
+            );
+
+        hnsw_realization_recalls.push_back(
+            hnsw_recall
+        );
+
+        acorn_realization_recalls.push_back(
+            acorn_recall
+        );
+
+        racorn_realization_recalls.push_back(
+            racorn_recall
+        );
+
+        FilterRealizationStats
+            realization_stats;
+
+        realization_stats.realization_index =
+            realization_index;
+
+        realization_stats.residue =
+            residue;
+
+        realization_stats.eligible_count =
+            eligible_count;
+
+        realization_stats.observed_selectivity =
+            static_cast<double>(
+                eligible_count
+            ) /
+            static_cast<double>(
+                kVectorCount
+            );
+
+        realization_stats.hnsw_recall_at_k =
+            hnsw_recall;
+
+        realization_stats.acorn_recall_at_k =
+            acorn_recall;
+
+        realization_stats.racorn_recall_at_k =
+            racorn_recall;
+
+        if (
+            local_racorn.samples >
+            0
+        ) {
+
+            realization_stats.racorn_mean_distances =
+                local_racorn
+                    .computed_distances_sum /
+                static_cast<double>(
+                    local_racorn.samples
+                );
+
+            realization_stats
+                .racorn_mean_fallback_count =
+                local_racorn
+                    .fallback_count_sum /
+                static_cast<double>(
+                    local_racorn.samples
+                );
+
+            realization_stats
+                .racorn_fallback_query_fraction =
+                static_cast<double>(
+                    local_racorn
+                        .queries_with_fallback
+                ) /
+                static_cast<double>(
+                    local_racorn.samples
+                );
+        }
+
+        output.realizations.push_back(
+            realization_stats
+        );
+    }
 
     output.vector_count =
         index.size();
@@ -1134,8 +1469,14 @@ FilteredSearchBaseline::run(
     output.filter_threshold =
         filter_threshold;
 
-    output.eligible_count =
-        eligible_count;
+    output.realization_count =
+        realization_count;
+
+    output.min_eligible_count =
+        min_eligible;
+
+    output.max_eligible_count =
+        max_eligible;
 
     output.nominal_selectivity =
         static_cast<double>(
@@ -1145,41 +1486,31 @@ FilteredSearchBaseline::run(
             filter_modulus
         );
 
-    output.observed_selectivity =
-        static_cast<double>(
-            eligible_count
-        ) /
-        static_cast<double>(
-            kVectorCount
-        );
-
     output.hnsw =
         finish_stats(
             "HNSW",
-            hnsw_accumulator
+            global_hnsw,
+            hnsw_realization_recalls
         );
 
     output.acorn =
         finish_stats(
             "ACORN-1",
-            acorn_accumulator
+            global_acorn,
+            acorn_realization_recalls
         );
 
     output.racorn =
         finish_stats(
             "RACORN-1",
-            racorn_accumulator
+            global_racorn,
+            racorn_realization_recalls
         );
 
     output.exact_ground_truth_complete =
         exact_complete;
 
-    output.racorn_fallback_observed =
-        output.racorn
-            .queries_with_fallback >
-        0;
-
-    const bool filters_valid =
+    output.filters_valid =
         output.hnsw
             .all_results_satisfy_filter &&
         output.acorn
@@ -1187,21 +1518,20 @@ FilteredSearchBaseline::run(
         output.racorn
             .all_results_satisfy_filter;
 
-    //
-    // En G4B no exigimos fallback RACORN para PASS.
-    //
-    // Esa condición sería metodológicamente incorrecta porque
-    // precisamente queremos descubrir en qué selectividad empieza
-    // a activarse.
-    //
+    output.racorn_fallback_observed =
+        output.racorn
+            .queries_with_fallback >
+        0;
 
     output.passed =
         output.vector_count ==
             kVectorCount &&
-        output.eligible_count >=
+        output.realization_count >
+            0 &&
+        output.min_eligible_count >=
             kNeighbors &&
         output.exact_ground_truth_complete &&
-        filters_valid;
+        output.filters_valid;
 
     return output;
 }
