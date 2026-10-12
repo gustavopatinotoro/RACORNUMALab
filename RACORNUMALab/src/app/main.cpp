@@ -3,13 +3,18 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar G-DATA1.
+//  Ejecutar G-DATA1A — Tail Failure Audit.
 //
-//  G-DATA1 introduce SIFT como primera geometría vectorial real del
-//  laboratorio.
+//  Este Gate analiza las queries imperfectas observadas durante G-DATA1
+//  y distingue:
 //
-//  La ubicación de los datos NO se codifica en el proyecto.
-//  Debe proporcionarse mediante:
+//      - underfill;
+//      - resultado vacío;
+//      - top-k completo pero incorrecto.
+//
+//  Una degradación de calidad NO invalida el experimento.
+//
+//  El directorio SIFT se proporciona con:
 //
 //      --data-dir <ruta>
 //
@@ -17,22 +22,11 @@
 //
 //      RACORNUMA_SIFT_DIR=<ruta>
 //
-//  Ejemplo:
-//
-//      --data-dir
-//      /Users/gapt/Documents/Developer/DataRacornUmaLab/data/sift
-//
-//  Invariantes:
-//  - RACORN upstream intacto.
-//  - CPU solamente.
-//  - Sin Metal/GPU.
-//  - Ground truth filtrado exacto.
-//
 //  Ejecutar en Release.
 //
 
 #include "core/BuildInfo.hpp"
-#include "core/RacornSiftValidation.hpp"
+#include "core/RacornSiftTailAudit.hpp"
 #include "integration/RacornProbe.hpp"
 #include "platform/apple/SystemInfo.hpp"
 
@@ -75,7 +69,8 @@ std::filesystem::path resolve_data_directory(
         ) {
 
             if (
-                index + 1 >=
+                index +
+                    1 >=
                 argc
             ) {
 
@@ -87,7 +82,8 @@ std::filesystem::path resolve_data_directory(
             return
                 std::filesystem::path(
                     argv[
-                        index + 1
+                        index +
+                            1
                     ]
                 );
         }
@@ -109,8 +105,8 @@ std::filesystem::path resolve_data_directory(
     }
 
     throw std::runtime_error(
-        "No se especifico el directorio SIFT.\n"
-        "Use --data-dir <ruta> o defina RACORNUMA_SIFT_DIR."
+        "Especifique --data-dir <ruta> "
+        "o RACORNUMA_SIFT_DIR."
     );
 }
 
@@ -125,7 +121,7 @@ int main(
         BuildInfo;
 
     using racorn_uma::core::
-        RacornSiftValidation;
+        RacornSiftTailAudit;
 
     using racorn_uma::integration::
         RacornProbe;
@@ -135,22 +131,21 @@ int main(
 
     try {
 
-        const std::filesystem::path
-            data_directory =
-                resolve_data_directory(
-                    argc,
-                    argv
-                );
+        const auto data_directory =
+            resolve_data_directory(
+                argc,
+                argv
+            );
 
         const auto result =
-            RacornSiftValidation::run(
+            RacornSiftTailAudit::run(
                 data_directory
             );
 
         std::cout
             << "\n========================================\n"
             << " RACORNUMALab\n"
-            << " Gate G-DATA1 - RACORN sobre SIFT\n"
+            << " Gate G-DATA1A - Tail Failure Audit\n"
             << "========================================\n\n";
 
         std::cout
@@ -183,54 +178,20 @@ int main(
         std::cout
             << "[Dataset]\n"
             << "Dataset                     : SIFT1M\n"
-            << "Subset base                 : train[0:100000]\n"
-            << "Directorio externo          : "
-            << result.data_directory.string()
-            << '\n'
+            << "Subset                      : train[0:100000]\n"
             << "N                           : "
             << result.vector_count
             << '\n'
             << "D                           : "
             << result.dimensions
             << '\n'
-            << "Queries reales              : "
+            << "Queries                     : "
             << result.query_count
-            << '\n'
-            << "Metrica                     : L2\n"
-            << "Metadata/geometria          : independientes\n"
-            << "Ground truth original SIFT  : NO\n"
-            << "Ground truth filtrado       : exacto independiente\n\n";
-
-        std::cout
-            << "[Configuracion RACORN]\n"
-            << "M                           : "
-            << result.connectivity
-            << '\n'
-            << "efConstruction              : "
-            << result.ef_construction
-            << '\n'
-            << "efSearch                    : "
-            << result.ef_search
             << '\n'
             << "k                           : "
             << result.k
             << '\n'
-            << "two_hop_threshold           : "
-            << std::fixed
-            << std::setprecision(2)
-            << result.two_hop_threshold
-            << '\n'
-            << "Mean Recall target          : "
-            << std::setprecision(4)
-            << result.mean_recall_target
-            << '\n'
-            << "Min Recall target           : "
-            << result.min_recall_target
-            << "\n\n";
-
-        std::cout
-            << "[Selectividad]\n"
-            << "Media                       : "
+            << "Selectividad media          : "
             << std::fixed
             << std::setprecision(4)
             << (
@@ -245,7 +206,7 @@ int main(
             << "\n\n";
 
         std::cout
-            << "[Sweep Bridge Budget]\n\n";
+            << "[Resumen de cola]\n\n";
 
         std::cout
             << std::left
@@ -259,32 +220,26 @@ int main(
             << std::setw(11)
             << "MinRec"
 
-            << std::setw(11)
-            << "P01"
-
-            << std::setw(11)
-            << "P05"
-
-            << std::setw(11)
-            << "Perfect%"
+            << std::setw(9)
+            << "Perfect"
 
             << std::setw(10)
+            << "Underfill"
+
+            << std::setw(8)
+            << "Empty"
+
+            << std::setw(11)
+            << "FullWrong"
+
+            << std::setw(9)
+            << "ResMin"
+
+            << std::setw(9)
             << "WorstQ"
 
-            << std::setw(12)
-            << "Dist"
-
-            << std::setw(12)
-            << "Visited"
-
-            << std::setw(14)
-            << "Pred"
-
-            << std::setw(11)
-            << "Fallback"
-
             << std::setw(10)
-            << "Robust"
+            << "Valid"
 
             << '\n';
 
@@ -309,36 +264,27 @@ int main(
                 << std::setw(11)
                 << item.min_recall_at_k
 
-                << std::setw(11)
-                << item.recall_p01
-
-                << std::setw(11)
-                << item.recall_p05
-
-                << std::setw(11)
-                << (
-                    item.perfect_query_fraction *
-                    100.0
-                )
+                << std::setw(9)
+                << item.perfect_queries
 
                 << std::setw(10)
+                << item.underfilled_queries
+
+                << std::setw(8)
+                << item.empty_queries
+
+                << std::setw(11)
+                << item.full_but_inexact_queries
+
+                << std::setw(9)
+                << item.result_count_min
+
+                << std::setw(9)
                 << item.worst_query_index
 
-                << std::setw(12)
-                << item.mean_computed_distances
-
-                << std::setw(12)
-                << item.mean_visited_members
-
-                << std::setw(14)
-                << item.mean_predicate_evaluations
-
-                << std::setw(11)
-                << item.mean_fallback_count
-
                 << std::setw(10)
                 << (
-                    item.robust_quality_pass
+                    item.valid
                         ? "PASS"
                         : "FAIL"
                 )
@@ -346,8 +292,109 @@ int main(
                 << '\n';
         }
 
+        //
+        // Histogramas.
+        //
+
         std::cout
-            << "\n[Queries perfectas]\n";
+            << "\n[Histogramas Recall@10]\n";
+
+        for (
+            auto const& item :
+            result.cases
+        ) {
+
+            std::cout
+                << "BR="
+                << std::fixed
+                << std::setprecision(2)
+                << item.bridge_budget_ratio
+                << " | ";
+
+            for (
+                std::size_t bin = 0;
+                bin <= 10U;
+                ++bin
+            ) {
+
+                if (
+                    item.recall_histogram[
+                        bin
+                    ] ==
+                    0U
+                ) {
+                    continue;
+                }
+
+                std::cout
+                    << std::fixed
+                    << std::setprecision(1)
+                    << (
+                        static_cast<double>(
+                            bin
+                        ) /
+                        10.0
+                    )
+                    << ":"
+                    << item.recall_histogram[
+                        bin
+                    ]
+                    << " ";
+            }
+
+            std::cout
+                << '\n';
+        }
+
+        std::cout
+            << "\n[Histogramas result_count]\n";
+
+        for (
+            auto const& item :
+            result.cases
+        ) {
+
+            std::cout
+                << "BR="
+                << std::fixed
+                << std::setprecision(2)
+                << item.bridge_budget_ratio
+                << " | ";
+
+            for (
+                std::size_t count = 0;
+                count <= result.k;
+                ++count
+            ) {
+
+                if (
+                    item.result_count_histogram[
+                        count
+                    ] ==
+                    0U
+                ) {
+                    continue;
+                }
+
+                std::cout
+                    << count
+                    << ":"
+                    << item.result_count_histogram[
+                        count
+                    ]
+                    << " ";
+            }
+
+            std::cout
+                << '\n';
+        }
+
+        //
+        // Trabajo.
+        //
+
+        std::cout
+            << "\n[Trabajo RACORN]\n";
 
         for (
             auto const& item :
@@ -360,84 +407,137 @@ int main(
                 << std::setprecision(2)
                 << item.bridge_budget_ratio
 
-                << " | perfectas="
-                << item.perfect_query_count
-                << "/"
-                << result.query_count
+                << " | dist="
+                << std::setprecision(3)
+                << item.mean_computed_distances
 
-                << " | imperfectas="
-                << item.imperfect_query_count
+                << " | visited="
+                << item.mean_visited_members
 
-                << " | minRecall="
+                << " | pred="
+                << item.mean_predicate_evaluations
+
+                << " | fallback="
+                << item.mean_fallback_count
+
+                << " | P01="
                 << std::setprecision(4)
-                << item.min_recall_at_k
+                << item.recall_p01
+
+                << " | P05="
+                << item.recall_p05
 
                 << '\n';
         }
 
-        std::cout
-            << "\n[Punto robusto minimo observado]\n";
+        //
+        // Auditoría query por query.
+        //
 
-        if (
-            result.minimum_robust_point.found
+        std::cout
+            << "\n[Queries imperfectas]\n";
+
+        for (
+            auto const& item :
+            result.cases
         ) {
 
             std::cout
-                << "BR*="
+                << "\n--- BR="
                 << std::fixed
                 << std::setprecision(2)
-                << result
-                    .minimum_robust_point
-                    .bridge_budget_ratio
+                << item.bridge_budget_ratio
+                << " | imperfectas="
+                << item.imperfect_queries
+                << " ---\n";
 
-                << " | Recall="
-                << std::setprecision(4)
-                << result
-                    .minimum_robust_point
-                    .mean_recall_at_k
+            for (
+                auto const& record :
+                item.imperfect_records
+            ) {
 
-                << " | MinRecall="
-                << result
-                    .minimum_robust_point
-                    .min_recall_at_k
+                std::cout
+                    << "q="
+                    << record.query_index
 
-                << " | P01="
-                << result
-                    .minimum_robust_point
-                    .recall_p01
+                    << " tenant="
+                    << record.tenant_required
 
-                << " | dist="
-                << result
-                    .minimum_robust_point
-                    .mean_computed_distances
+                    << " eligible="
+                    << record.selected_count
 
-                << " | pred="
-                << result
-                    .minimum_robust_point
-                    .mean_predicate_evaluations
+                    << " results="
+                    << record.result_count
 
-                << '\n';
+                    << " hits="
+                    << record.hits
+                    << "/"
+                    << result.k
 
-        } else {
+                    << " recall="
+                    << std::fixed
+                    << std::setprecision(1)
+                    << record.recall_at_k
 
-            std::cout
-                << "BR*=NO ENCONTRADO "
-                << "en el sweep evaluado.\n";
+                    << " dist="
+                    << record.computed_distances
+
+                    << " visited="
+                    << record.visited_members
+
+                    << " pred="
+                    << record.predicate_evaluations
+
+                    << " fallback="
+                    << record.fallback_count
+
+                    << " type=";
+
+                if (
+                    record.empty
+                ) {
+
+                    std::cout
+                        << "EMPTY";
+
+                } else if (
+                    record.underfilled
+                ) {
+
+                    std::cout
+                        << "UNDERFILL";
+
+                } else if (
+                    record.full_but_inexact
+                ) {
+
+                    std::cout
+                        << "FULL_BUT_INEXACT";
+
+                } else {
+
+                    std::cout
+                        << "OTHER";
+                }
+
+                std::cout
+                    << '\n';
+            }
         }
 
         std::cout
-            << "\n[Validez]\n"
-            << "Base externa valida          : "
+            << "\n[Validez experimental]\n"
+            << "Base valida                 : "
             << yes_no(
                 result.base_file_valid
             )
             << '\n'
-            << "Queries externas validas     : "
+            << "Queries validas              : "
             << yes_no(
                 result.query_file_valid
             )
             << '\n'
-            << "Metadata externa valida      : "
+            << "Metadata valida              : "
             << yes_no(
                 result.metadata_file_valid
             )
@@ -463,10 +563,8 @@ int main(
             << "Navegacion                  : CPU\n"
             << "Metal                       : NO\n"
             << "GPU                         : NO\n"
-            << "Bitset                      : NO\n"
-            << "Predicate                   : CPU directo\n"
-            << "Geometria                   : SIFT real\n"
-            << "Datos vendorizados          : NO\n"
+            << "Exact fallback              : NO\n"
+            << "Underfill invalida harness  : NO\n"
             << "Ground truth                : exacto filtrado\n\n";
 
         if (
@@ -474,13 +572,13 @@ int main(
         ) {
 
             std::cerr
-                << "[G-DATA1] FAIL\n";
+                << "[G-DATA1A] FAIL\n";
 
             return 1;
         }
 
         std::cout
-            << "[G-DATA1] PASS\n";
+            << "[G-DATA1A] PASS\n";
 
         return 0;
 
@@ -489,7 +587,7 @@ int main(
     ) {
 
         std::cerr
-            << "\n[G-DATA1] FAIL: "
+            << "\n[G-DATA1A] FAIL: "
             << error.what()
             << '\n';
 
