@@ -3,47 +3,39 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar el primer flujo compute real CPU↔GPU utilizando memoria
-//  unificada mediante MTLStorageModeShared.
+//  Ejecutar G-UMA2 y verificar equivalencia exacta entre un predicado
+//  de metadatos evaluado por CPU y el mismo predicado evaluado mediante
+//  GPU Metal.
 //
 //  Gate:
-//  G-UMA1 — Shared Buffer Compute Probe.
+//  G-UMA2 — Predicate Engine Metal.
 //
-//  Flujo validado:
+//  Restricción arquitectónica principal:
 //
-//      CPU inicializa
-//             ↓
-//      MTLBuffer Shared
-//             ↓
-//      GPU Metal
-//             ↓
-//      mismo MTLBuffer Shared
-//             ↓
-//      CPU verifica
+//      RACORN CPU permanece completamente intacto.
+//
+//  Este Gate todavía no conecta la máscara GPU con RACORN.
 //
 //  Condición PASS:
 //  - Metal disponible.
-//  - Memoria unificada.
-//  - Biblioteca Metal disponible.
-//  - Kernel encontrado.
-//  - Pipeline creado.
-//  - Command Queue creada.
-//  - Buffer Shared válido.
-//  - Command Buffer completado.
-//  - Cero diferencias respecto del oráculo CPU.
+//  - UMA disponible.
+//  - Buffers Shared válidos.
+//  - Kernel Metal ejecutado.
+//  - Todos los valores GPU pertenecen a {0,1}.
+//  - CPU y GPU seleccionan exactamente los mismos IDs.
+//  - Cero diferencias en 1.048.576 registros.
 //
-//  RACORN:
-//  Permanece completamente intacto.
-//
-//  Importante:
-//  Este Gate no mide rendimiento.
+//  Nota:
+//  La máscara utiliza un byte por vector.
+//  La compactación a bitset pertenece a G-UMA3.
 //
 
 #include "core/BuildInfo.hpp"
 #include "integration/RacornProbe.hpp"
-#include "platform/apple/SharedBufferProbe.hpp"
+#include "platform/apple/PredicateEngineProbe.hpp"
 #include "platform/apple/SystemInfo.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
@@ -86,23 +78,19 @@ int main() {
         RacornProbe;
 
     using racorn_uma::platform::apple::
-        SharedBufferProbe;
+        PredicateEngineProbe;
 
     using racorn_uma::platform::apple::
         SystemInfo;
 
     const auto result =
-        SharedBufferProbe::run();
+        PredicateEngineProbe::run();
 
     std::cout
         << "========================================\n"
         << " RACORNUMALab\n"
-        << " Gate G-UMA1 - Shared Buffer Compute\n"
+        << " Gate G-UMA2 - Predicate Engine Metal\n"
         << "========================================\n\n";
-
-    //
-    // Plataforma.
-    //
 
     std::cout
         << "[Plataforma]\n";
@@ -127,10 +115,6 @@ int main() {
         << SystemInfo::hardware_model()
         << "\n\n";
 
-    //
-    // Provenance RACORN.
-    //
-
     std::cout
         << "[RACORN congelado]\n";
 
@@ -149,12 +133,8 @@ int main() {
         << RacornProbe::commit()
         << "\n\n";
 
-    //
-    // Compute Metal.
-    //
-
     std::cout
-        << "[Metal Compute]\n";
+        << "[Predicate Engine]\n";
 
     std::cout
         << "Metal disponible         : "
@@ -195,7 +175,7 @@ int main() {
         << '\n';
 
     std::cout
-        << "Compute Pipeline         : "
+        << "Pipeline                 : "
         << yes_no(
             result.pipeline_available
         )
@@ -209,23 +189,16 @@ int main() {
         << '\n';
 
     std::cout
-        << "Shared Buffer            : "
+        << "Metadata Shared          : "
         << yes_no(
-            result.shared_buffer_available
+            result.metadata_buffer_available
         )
         << '\n';
 
     std::cout
-        << "Command Buffer           : "
+        << "Mask Shared              : "
         << yes_no(
-            result.command_buffer_available
-        )
-        << '\n';
-
-    std::cout
-        << "Compute Encoder          : "
-        << yes_no(
-            result.encoder_available
+            result.mask_buffer_available
         )
         << '\n';
 
@@ -236,26 +209,57 @@ int main() {
         )
         << "\n\n";
 
-    //
-    // Workload.
-    //
+    std::cout
+        << "[Metadata]\n";
 
     std::cout
-        << "[Workload]\n";
-
-    std::cout
-        << "Elementos                : "
+        << "Registros                : "
         << result.element_count
         << '\n';
 
     std::cout
-        << "Buffer                    : "
+        << "Columnas                 : "
+        << result.metadata_column_count
+        << '\n';
+
+    std::cout
+        << "Metadata buffer          : "
         << std::fixed
         << std::setprecision(2)
         << bytes_to_mib(
-            result.buffer_bytes
+            result.metadata_bytes
         )
         << " MiB\n";
+
+    std::cout
+        << "Eligibility mask         : "
+        << std::fixed
+        << std::setprecision(2)
+        << bytes_to_mib(
+            result.mask_bytes
+        )
+        << " MiB\n\n";
+
+    std::cout
+        << "[Filtro]\n";
+
+    std::cout
+        << "tenant_id                : == 7\n";
+
+    std::cout
+        << "year                     : >= 2022\n";
+
+    std::cout
+        << "language                 : == 2\n";
+
+    std::cout
+        << "category                 : IN {3,7,9}\n";
+
+    std::cout
+        << "security_level           : <= 2\n\n";
+
+    std::cout
+        << "[Dispatch]\n";
 
     std::cout
         << "Execution width          : "
@@ -274,25 +278,60 @@ int main() {
         << '\n';
 
     std::cout
-        << "Dispatches GPU           : 1\n";
-
-    std::cout
-        << "Sincronizaciones CPU/GPU : 1\n\n";
-
-    //
-    // Verificación.
-    //
-
-    std::cout
-        << "[Verificacion bit-exacta]\n";
-
-    std::cout
-        << "Elementos verificados    : "
+        << "Hilos logicos GPU        : "
         << result.element_count
         << '\n';
 
     std::cout
-        << "Diferencias              : "
+        << "Dispatches GPU           : 1\n";
+
+    std::cout
+        << "Sincronizaciones CPU/GPU : 1\n";
+
+    std::cout
+        << "Atomics                  : 0\n";
+
+    std::cout
+        << "Barreras threadgroup     : 0\n\n";
+
+    std::cout
+        << "[Resultado del filtro]\n";
+
+    std::cout
+        << "Seleccionados CPU        : "
+        << result.cpu_selected_count
+        << '\n';
+
+    std::cout
+        << "Seleccionados GPU        : "
+        << result.gpu_selected_count
+        << '\n';
+
+    std::cout
+        << "Selectividad observada   : "
+        << std::fixed
+        << std::setprecision(6)
+        << (
+            result.observed_selectivity *
+            100.0
+        )
+        << " %\n\n";
+
+    std::cout
+        << "[Verificacion semantica]\n";
+
+    std::cout
+        << "Registros verificados    : "
+        << result.element_count
+        << '\n';
+
+    std::cout
+        << "Valores mask invalidos   : "
+        << result.invalid_mask_value_count
+        << '\n';
+
+    std::cout
+        << "Diferencias CPU/GPU      : "
         << result.mismatch_count
         << '\n';
 
@@ -305,7 +344,7 @@ int main() {
 
     if (
         result.mismatch_count >
-        0 &&
+            0 &&
         result.first_mismatch_index !=
             std::numeric_limits<
                 std::size_t
@@ -318,21 +357,17 @@ int main() {
             << '\n';
 
         std::cout
-            << "Esperado                 : 0x"
-            << std::hex
-            << std::uppercase
-            << result.first_mismatch_expected
-            << std::dec
-            << std::nouppercase
+            << "Esperado                 : "
+            << static_cast<unsigned>(
+                result.first_mismatch_expected
+            )
             << '\n';
 
         std::cout
-            << "Observado                : 0x"
-            << std::hex
-            << std::uppercase
-            << result.first_mismatch_observed
-            << std::dec
-            << std::nouppercase
+            << "Observado                : "
+            << static_cast<unsigned>(
+                result.first_mismatch_observed
+            )
             << '\n';
     }
 
@@ -356,33 +391,35 @@ int main() {
         << "HNSW ejecutado           : NO\n";
 
     std::cout
-        << "Predicate Engine         : NO\n";
+        << "Navegacion GPU           : NO\n";
 
     std::cout
-        << "Copia CPU->VRAM explicita: NO\n";
+        << "Predicate CPU            : SI\n";
 
     std::cout
-        << "Copia VRAM->CPU explicita: NO\n";
+        << "Predicate GPU            : SI\n";
 
     std::cout
-        << "Kernel GPU ejecutado     : "
-        << yes_no(
-            result.command_completed
-        )
-        << "\n\n";
+        << "Metadata Shared          : SI\n";
+
+    std::cout
+        << "Resultado Shared         : SI\n";
+
+    std::cout
+        << "Copia explicita a VRAM   : NO\n\n";
 
     if (
         !result.valid
     ) {
 
         std::cerr
-            << "[G-UMA1] FAIL\n";
+            << "[G-UMA2] FAIL\n";
 
         return 1;
     }
 
     std::cout
-        << "[G-UMA1] PASS\n";
+        << "[G-UMA2] PASS\n";
 
     return 0;
 }
