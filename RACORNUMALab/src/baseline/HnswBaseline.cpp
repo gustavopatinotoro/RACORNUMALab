@@ -3,43 +3,32 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar la primera construcción y consulta HNSW real utilizando
-//  exactamente la infraestructura index_gt incluida en RACORN/USEARCH.
+//  Construir un HNSW parametrizable para medir cómo escala su memoria
+//  en función del número de vectores.
 //
 //  Gate:
-//  G3A — Baseline funcional HNSW.
+//  G3C — Escalado controlado de memoria.
 //
-//  Diseño experimental:
-//  - Dataset sintético determinista.
-//  - 16 vectores.
-//  - 4 dimensiones.
-//  - Distancia L2 al cuadrado.
-//  - Construcción secuencial.
-//  - Un único contexto de búsqueda.
-//  - Oráculo mediante exact search del mismo índice.
+//  Diseño:
+//  Cada tamaño N debe ejecutarse en un proceso independiente para evitar
+//  contaminación entre experimentos por cachés y retención del allocator.
 //
-//  Justificación:
-//  La pequeña cardinalidad elimina deliberadamente presión de memoria,
-//  concurrencia y efectos de rendimiento. El único objetivo de este Gate
-//  es verificar la ruta funcional:
+//  Dataset:
+//      x_i = [i, 0, 0, 0]
 //
-//      datos -> index_gt -> HNSW -> búsqueda
+//  Consulta:
+//      q = [N/2 + 0.1, 0, 0, 0]
 //
-//  Invariantes:
-//  - two_hop_threshold permanece en su valor desactivado (< 0).
-//  - racorn permanece desactivado.
-//  - three_hop_threshold permanece desactivado.
-//  - fallback_exact_threshold permanece desactivado.
-//  - No se modifica código vendorizado.
+//  Esto hace que el ground truth sea determinista.
 //
-//  Seguridad:
-//  - No existe entrada externa.
-//  - No existe acceso a red.
-//  - No existe acceso a archivos.
-//  - Todo el almacenamiento utilizado por el experimento es RAII.
+//  Advertencia:
+//  D=4 es deliberado. Este Gate caracteriza principalmente el coste
+//  estructural del índice, no el coste final de un embedding real.
 //
 
 #include "baseline/HnswBaseline.hpp"
+
+#include "platform/apple/MemoryInfo.hpp"
 
 #include <usearch/index.hpp>
 #include <usearch/index_plugins.hpp>
@@ -47,6 +36,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <new>
+#include <stdexcept>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -57,12 +47,13 @@ namespace {
 
 using namespace unum::usearch;
 
-constexpr std::size_t kVectorCount = 16;
+using racorn_uma::platform::apple::MemoryInfo;
+
 constexpr std::size_t kDimensions = 4;
 constexpr std::size_t kConnectivity = 16;
 constexpr std::size_t kEfConstruction = 64;
 constexpr std::size_t kEfSearch = 64;
-constexpr std::size_t kNeighbors = 3;
+constexpr std::size_t kNeighbors = 10;
 
 using VectorKey = std::size_t;
 using Slot = std::size_t;
@@ -70,32 +61,35 @@ using Slot = std::size_t;
 using Index =
     index_gt<float, VectorKey, Slot>;
 
-//
-// Almacén de vectores.
-//
-// RACORN/USEARCH conserva la estructura HNSW mientras la métrica utilizada
-// por este experimento resuelve el vector asociado a cada key desde este
-// almacenamiento externo.
-//
 class VectorStore final {
 
 public:
 
-    VectorStore() {
+    explicit VectorStore(
+        std::size_t vector_count
+    ) {
 
-        data_.reserve(
-            kVectorCount * kDimensions
+        data_.resize(
+            vector_count *
+            kDimensions
         );
 
-        for (std::size_t i = 0; i < kVectorCount; ++i) {
+        for (
+            std::size_t i = 0;
+            i < vector_count;
+            ++i
+        ) {
 
-            data_.push_back(
-                static_cast<float>(i)
-            );
+            float* vector =
+                data_.data() +
+                i * kDimensions;
 
-            data_.push_back(0.0F);
-            data_.push_back(0.0F);
-            data_.push_back(0.0F);
+            vector[0] =
+                static_cast<float>(i);
+
+            vector[1] = 0.0F;
+            vector[2] = 0.0F;
+            vector[3] = 0.0F;
         }
     }
 
@@ -104,22 +98,15 @@ public:
         std::size_t index
     ) const noexcept {
 
-        return data_.data() +
-               index * kDimensions;
+        return
+            data_.data() +
+            index * kDimensions;
     }
 
 private:
 
     std::vector<float> data_;
 };
-
-//
-// Métrica L2².
-//
-// Sigue el contrato de métrica requerido por index_gt.
-// La distancia al cuadrado conserva exactamente el mismo orden
-// de vecinos que la distancia euclídea.
-//
 
 struct L2Metric final {
 
@@ -190,19 +177,16 @@ struct L2Metric final {
     }
 };
 
-//
-// index_gt necesita conservar el alineamiento utilizado por el
-// artefacto oficial. Esta envoltura administra ese almacenamiento
-// mediante RAII.
-//
-
 template <typename IndexType>
 class AlignedIndex final {
 
 public:
 
     using Allocator =
-        aligned_allocator_gt<IndexType, 64>;
+        aligned_allocator_gt<
+            IndexType,
+            64
+        >;
 
     explicit AlignedIndex(
         index_config_t const& configuration
@@ -247,13 +231,6 @@ private:
 
     IndexType* pointer_{nullptr};
 };
-
-//
-// Predicado neutro.
-//
-// Se utiliza para que HNSW y exact search observen exactamente
-// el mismo universo de nodos.
-//
 
 struct AllowAll final {
 
@@ -316,33 +293,52 @@ double recall_at_k(
         approximate
     ) {
 
-        if (
-            exact_set.contains(key)
-        ) {
-
+        if (exact_set.contains(key)) {
             ++hits;
         }
     }
 
     return
         static_cast<double>(hits) /
-        static_cast<double>(exact.size());
+        static_cast<double>(
+            exact.size()
+        );
 }
 
 } // namespace
 
 HnswBaselineResult
-HnswBaseline::run() {
+HnswBaseline::run(
+    std::size_t vector_count
+) {
 
-    VectorStore store;
+    if (vector_count < kNeighbors) {
+
+        throw std::invalid_argument(
+            "vector_count debe ser >= k"
+        );
+    }
+
+    HnswBaselineResult output;
+
+    output.memory_start =
+        MemoryInfo::capture();
+
+    VectorStore store(
+        vector_count
+    );
+
+    output.memory_after_vectors =
+        MemoryInfo::capture();
 
     L2Metric metric{
         .store = &store
     };
 
-    index_config_t index_configuration(
-        kConnectivity
-    );
+    index_config_t
+        index_configuration(
+            kConnectivity
+        );
 
     AlignedIndex<Index>
         aligned_index(
@@ -352,20 +348,15 @@ HnswBaseline::run() {
     Index& index =
         aligned_index.get();
 
-    //
-    // Un único contexto de trabajo.
-    //
-
     index.reserve(
         index_limits_t(
-            kVectorCount,
+            vector_count,
             1
         )
     );
 
-    //
-    // Construcción HNSW.
-    //
+    output.memory_after_reserve =
+        MemoryInfo::capture();
 
     index_update_config_t
         update_configuration;
@@ -373,11 +364,12 @@ HnswBaseline::run() {
     update_configuration.expansion =
         kEfConstruction;
 
-    update_configuration.thread = 0;
+    update_configuration.thread =
+        0;
 
     for (
         std::size_t i = 0;
-        i < kVectorCount;
+        i < vector_count;
         ++i
     ) {
 
@@ -389,18 +381,15 @@ HnswBaseline::run() {
         );
     }
 
-    //
-    // Consulta deliberadamente situada cerca del vector 5.
-    //
-    // Distancias L2² principales:
-    //
-    // key 5 -> (5.1 - 5)^2 = 0.01
-    // key 6 -> (5.1 - 6)^2 = 0.81
-    // key 4 -> (5.1 - 4)^2 = 1.21
-    //
+    output.memory_after_build =
+        MemoryInfo::capture();
 
     const float query[kDimensions]{
-        5.1F,
+
+        static_cast<float>(
+            vector_count / 2
+        ) + 0.1F,
+
         0.0F,
         0.0F,
         0.0F
@@ -408,15 +397,14 @@ HnswBaseline::run() {
 
     AllowAll allow_all;
 
-    //
-    // Oráculo exacto.
-    //
-
     index_search_config_t
         exact_configuration;
 
-    exact_configuration.exact = true;
-    exact_configuration.thread = 0;
+    exact_configuration.exact =
+        true;
+
+    exact_configuration.thread =
+        0;
 
     auto exact_result =
         index.search(
@@ -427,19 +415,14 @@ HnswBaseline::run() {
             allow_all
         );
 
-    //
-    // HNSW puro.
-    //
-    // two_hop_threshold < 0 implica ruta HNSW estándar.
-    //
-
     index_search_config_t
         hnsw_configuration;
 
     hnsw_configuration.expansion =
         kEfSearch;
 
-    hnsw_configuration.thread = 0;
+    hnsw_configuration.thread =
+        0;
 
     hnsw_configuration.two_hop_threshold =
         -1.0;
@@ -474,28 +457,14 @@ HnswBaseline::run() {
                 hnsw_result
             );
 
+    output.memory_after_search =
+        MemoryInfo::capture();
+
     const double recall =
         recall_at_k(
             hnsw_keys,
             exact_keys
         );
-
-    const bool size_ok =
-        index.size() ==
-        kVectorCount;
-
-    const bool exact_size_ok =
-        exact_keys.size() ==
-        kNeighbors;
-
-    const bool hnsw_size_ok =
-        hnsw_keys.size() ==
-        kNeighbors;
-
-    const bool recall_ok =
-        recall == 1.0;
-
-    HnswBaselineResult output;
 
     output.vector_count =
         index.size();
@@ -516,18 +485,45 @@ HnswBaseline::run() {
         kNeighbors;
 
     output.exact_keys =
-        std::move(exact_keys);
+        std::move(
+            exact_keys
+        );
 
     output.hnsw_keys =
-        std::move(hnsw_keys);
+        std::move(
+            hnsw_keys
+        );
 
     output.recall_at_k =
         recall;
 
+    const bool memory_ok =
+        output.memory_start.valid &&
+        output.memory_after_vectors.valid &&
+        output.memory_after_reserve.valid &&
+        output.memory_after_build.valid &&
+        output.memory_after_search.valid;
+
+    const bool index_ok =
+        output.vector_count ==
+        vector_count;
+
+    const bool exact_ok =
+        output.exact_keys.size() ==
+        kNeighbors;
+
+    const bool hnsw_ok =
+        output.hnsw_keys.size() ==
+        kNeighbors;
+
+    const bool recall_ok =
+        recall == 1.0;
+
     output.passed =
-        size_ok &&
-        exact_size_ok &&
-        hnsw_size_ok &&
+        memory_ok &&
+        index_ok &&
+        exact_ok &&
+        hnsw_ok &&
         recall_ok;
 
     return output;

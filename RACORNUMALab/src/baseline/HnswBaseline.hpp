@@ -3,32 +3,35 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Definir el experimento mínimo reproducible del HNSW base incluido
-//  en el artefacto RACORN/USEARCH.
+//  Definir un experimento HNSW parametrizable para estudiar el
+//  escalado de memoria sobre Apple Silicon.
 //
 //  Gate:
-//  G3A — Baseline funcional HNSW.
+//  G3C — Escalado controlado de memoria HNSW.
 //
-//  Responsabilidades:
-//  - Construir un índice HNSW pequeño y determinista.
-//  - Ejecutar búsqueda aproximada HNSW.
-//  - Ejecutar búsqueda exacta como oráculo.
-//  - Calcular Recall@k.
-//  - Verificar que la ruta HNSW funciona sobre Apple Silicon arm64.
+//  Variable experimental:
+//  - Número de vectores N.
+//
+//  Variables controladas:
+//  - Dimensión.
+//  - M.
+//  - efConstruction.
+//  - efSearch.
+//  - Número de hilos.
+//  - Métrica.
+//  - Semilla lógica del dataset.
 //
 //  Invariantes:
-//  - No activa ACORN.
-//  - No activa RACORN.
-//  - No activa 3-hop.
-//  - No utiliza Metal.
-//  - Utiliza un único hilo.
-//  - Los vectores permanecen en memoria durante toda la vida del índice.
-//
-//  Alcance:
-//  Este Gate verifica correctitud funcional, no rendimiento.
+//  - ACORN desactivado.
+//  - RACORN desactivado.
+//  - 3-hop desactivado.
+//  - Exact fallback desactivado.
+//  - Un único hilo.
 //
 
 #pragma once
+
+#include "platform/apple/MemoryInfo.hpp"
 
 #include <cstddef>
 #include <vector>
@@ -49,6 +52,21 @@ struct HnswBaselineResult final {
 
     double recall_at_k{};
 
+    platform::apple::ProcessMemorySnapshot
+        memory_start;
+
+    platform::apple::ProcessMemorySnapshot
+        memory_after_vectors;
+
+    platform::apple::ProcessMemorySnapshot
+        memory_after_reserve;
+
+    platform::apple::ProcessMemorySnapshot
+        memory_after_build;
+
+    platform::apple::ProcessMemorySnapshot
+        memory_after_search;
+
     bool passed{};
 };
 
@@ -57,7 +75,9 @@ class HnswBaseline final {
 public:
 
     [[nodiscard]]
-    static HnswBaselineResult run();
+    static HnswBaselineResult run(
+        std::size_t vector_count
+    );
 };
 
 } // namespace racorn_uma::baseline
