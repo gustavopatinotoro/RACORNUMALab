@@ -3,51 +3,46 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar la primera integración semántica entre RACORN CPU y un
-//  bitset de elegibilidad generado por GPU Metal sobre memoria UMA.
+//  Ejecutar el benchmark de punto de equilibrio CPU/GPU para la
+//  materialización de bitsets de predicados.
 //
 //  Gate:
-//  G-UMA4 — RACORN CPU consumiendo bitset GPU/UMA.
+//  G-UMA5A — Predicate Engine Break-Even.
 //
-//  Hipótesis inmediata:
-//  Sustituir la evaluación repetida del predicado por un lookup O(1)
-//  sobre un bitset semánticamente equivalente no debe modificar la
-//  navegación RACORN.
+//  Este Gate no ejecuta RACORN.
 //
-//  El Gate NO mide rendimiento.
+//  Objetivo:
+//  Identificar experimentalmente para qué combinación de:
 //
-//  PASS exige identidad de:
-//  - Top-k.
-//  - Recall.
-//  - computed_distances.
-//  - visited_members.
-//  - predicate_evaluations.
-//  - fallback_count.
+//      N
+//      +
+//      complejidad del predicado
 //
-//  RACORN permanece inalterado.
+//  el uso síncrono de GPU Metal comienza a superar la CPU.
+//
+//  Distinción esencial:
+//
+//      GPU device time
+//
+//  mide el kernel.
+//
+//      GPU E2E time
+//
+//  mide el coste realmente observado por el consumidor CPU.
+//
+//  Para una política dinámica futura utilizaremos GPU E2E, no
+//  únicamente el tiempo interno del kernel.
 //
 
 #include "core/BuildInfo.hpp"
 #include "integration/RacornProbe.hpp"
-#include "platform/apple/RacornUmaSemanticProbe.hpp"
+#include "platform/apple/PredicateBreakEvenBenchmark.hpp"
 #include "platform/apple/SystemInfo.hpp"
 
-#include <cstdint>
 #include <iomanip>
 #include <iostream>
 
 namespace {
-
-double bytes_to_kib(
-    std::uint64_t bytes
-) noexcept {
-
-    return
-        static_cast<double>(
-            bytes
-        ) /
-        1024.0;
-}
 
 char const* yes_no(
     bool value
@@ -70,431 +65,282 @@ int main() {
         RacornProbe;
 
     using racorn_uma::platform::apple::
-        RacornUmaSemanticProbe;
+        PredicateBreakEvenBenchmark;
 
     using racorn_uma::platform::apple::
         SystemInfo;
 
     const auto result =
-        RacornUmaSemanticProbe::run();
+        PredicateBreakEvenBenchmark::run();
 
     std::cout
         << "========================================\n"
         << " RACORNUMALab\n"
-        << " Gate G-UMA4 - RACORN + GPU Bitset\n"
+        << " Gate G-UMA5A - CPU/GPU Break-Even\n"
         << "========================================\n\n";
 
     std::cout
-        << "[Plataforma]\n";
-
-    std::cout
-        << "Compilador                 : "
+        << "[Plataforma]\n"
+        << "Compilador              : "
         << BuildInfo::compiler()
-        << '\n';
-
-    std::cout
-        << "Estandar C++               : "
+        << '\n'
+        << "Estandar C++            : "
         << BuildInfo::cpp_standard()
-        << '\n';
-
-    std::cout
-        << "Arquitectura               : "
+        << '\n'
+        << "Arquitectura            : "
         << BuildInfo::architecture()
-        << '\n';
-
-    std::cout
-        << "Modelo hardware            : "
+        << '\n'
+        << "Modelo hardware         : "
         << SystemInfo::hardware_model()
         << "\n\n";
 
     std::cout
-        << "[RACORN congelado]\n";
-
-    std::cout
-        << "Repositorio                 : "
+        << "[RACORN congelado]\n"
+        << "Repositorio              : "
         << RacornProbe::repository()
-        << '\n';
-
-    std::cout
-        << "Version                     : "
+        << '\n'
+        << "Version                  : "
         << RacornProbe::version()
-        << '\n';
-
-    std::cout
-        << "Commit                      : "
+        << '\n'
+        << "Commit                   : "
         << RacornProbe::commit()
         << "\n\n";
 
     std::cout
-        << "[Configuracion RACORN]\n";
-
-    std::cout
-        << "N                           : "
-        << result.vector_count
-        << '\n';
-
-    std::cout
-        << "D                           : "
-        << result.dimensions
-        << '\n';
-
-    std::cout
-        << "M                           : "
-        << result.connectivity
-        << '\n';
-
-    std::cout
-        << "efConstruction              : "
-        << result.ef_construction
-        << '\n';
-
-    std::cout
-        << "efSearch                    : "
-        << result.ef_search
-        << '\n';
-
-    std::cout
-        << "Queries                     : "
-        << result.query_count
-        << '\n';
-
-    std::cout
-        << "k                           : "
-        << result.k
-        << '\n';
-
-    std::cout
-        << "two_hop_threshold           : "
-        << std::fixed
-        << std::setprecision(2)
-        << result.two_hop_threshold
-        << '\n';
-
-    std::cout
-        << "bridge_budget_ratio         : "
-        << std::fixed
-        << std::setprecision(2)
-        << result.bridge_budget_ratio
-        << "\n\n";
-
-    std::cout
-        << "[GPU Predicate Engine]\n";
-
-    std::cout
-        << "Metal disponible            : "
+        << "[Metal]\n"
+        << "Metal disponible         : "
         << yes_no(
             result.metal_available
         )
-        << '\n';
-
-    std::cout
-        << "Dispositivo                 : "
+        << '\n'
+        << "Dispositivo              : "
         << result.device_name
-        << '\n';
-
-    std::cout
-        << "Memoria unificada           : "
+        << '\n'
+        << "Memoria unificada        : "
         << yes_no(
             result.unified_memory
         )
-        << '\n';
-
-    std::cout
-        << "Biblioteca Metal            : "
-        << yes_no(
-            result.library_available
-        )
-        << '\n';
-
-    std::cout
-        << "Kernel                      : "
+        << '\n'
+        << "Kernel                   : "
         << result.kernel_name
-        << '\n';
-
-    std::cout
-        << "Kernel encontrado           : "
-        << yes_no(
-            result.kernel_available
-        )
-        << '\n';
-
-    std::cout
-        << "Pipeline                    : "
+        << '\n'
+        << "Pipeline                 : "
         << yes_no(
             result.pipeline_available
         )
-        << '\n';
-
-    std::cout
-        << "Metadata Shared             : "
-        << yes_no(
-            result.metadata_buffer_available
-        )
-        << '\n';
-
-    std::cout
-        << "Bitset Shared               : "
-        << yes_no(
-            result.bitset_buffer_available
-        )
-        << '\n';
-
-    std::cout
-        << "GPU completada              : "
-        << yes_no(
-            result.command_completed
-        )
+        << '\n'
+        << "Execution width          : "
+        << result.thread_execution_width
+        << '\n'
+        << "Threads/group max        : "
+        << result
+            .max_total_threads_per_threadgroup
+        << '\n'
+        << "Threads/group usados     : "
+        << result.threads_per_threadgroup
         << "\n\n";
 
     std::cout
-        << "[Representacion UMA]\n";
-
-    std::cout
-        << "Columnas metadata           : "
+        << "[Metodologia]\n"
+        << "N maximo                 : "
+        << result.max_element_count
+        << '\n'
+        << "Columnas metadata        : "
         << result.metadata_column_count
+        << '\n'
+        << "Warmups/caso             : "
+        << result.warmup_iterations
+        << '\n'
+        << "Mediciones/caso          : "
+        << result.measured_iterations
+        << '\n'
+        << "Allocations en timing    : NO\n"
+        << "Pipeline creation timing : NO\n"
+        << "GPU dispatch/caso        : 1 por medicion\n"
+        << "GPU sync/caso            : 1 por medicion\n\n";
+
+    std::cout
+        << "[Predicados]\n"
+        << "P1 = tenant == 7\n"
+        << "P3 = P1 AND year>=2022 AND language==2\n"
+        << "P5 = P3 AND category IN {3,7,9}"
+        << " AND security_level<=2\n\n";
+
+    std::cout
+        << "[Resultados]\n\n";
+
+    std::cout
+        << std::left
+        << std::setw(6)
+        << "Pred"
+
+        << std::right
+        << std::setw(10)
+        << "N"
+
+        << std::setw(10)
+        << "Sel.%"
+
+        << std::setw(12)
+        << "CPU p50"
+
+        << std::setw(12)
+        << "CPU p95"
+
+        << std::setw(12)
+        << "GPU p50"
+
+        << std::setw(12)
+        << "GPU p95"
+
+        << std::setw(12)
+        << "Dev p50"
+
+        << std::setw(10)
+        << "Speedup"
+
+        << std::setw(10)
+        << "Winner"
+
         << '\n';
 
-    std::cout
-        << "Metadata total              : "
-        << std::fixed
-        << std::setprecision(2)
-        << bytes_to_kib(
-            result.metadata_bytes
-        )
-        << " KiB\n";
+    for (
+        auto const& benchmark_case :
+        result.cases
+    ) {
+
+        std::cout
+            << std::left
+            << std::setw(6)
+            << benchmark_case
+                .predicate_name
+
+            << std::right
+            << std::setw(10)
+            << benchmark_case
+                .element_count
+
+            << std::setw(10)
+            << std::fixed
+            << std::setprecision(3)
+            << (
+                benchmark_case
+                    .observed_selectivity *
+                100.0
+            )
+
+            << std::setw(12)
+            << std::setprecision(4)
+            << benchmark_case
+                .cpu_p50_ms
+
+            << std::setw(12)
+            << benchmark_case
+                .cpu_p95_ms
+
+            << std::setw(12)
+            << benchmark_case
+                .gpu_wall_p50_ms
+
+            << std::setw(12)
+            << benchmark_case
+                .gpu_wall_p95_ms;
+
+        if (
+            benchmark_case
+                .gpu_device_timing_available
+        ) {
+
+            std::cout
+                << std::setw(12)
+                << benchmark_case
+                    .gpu_device_p50_ms;
+
+        } else {
+
+            std::cout
+                << std::setw(12)
+                << "N/A";
+        }
+
+        std::cout
+            << std::setw(9)
+            << std::setprecision(2)
+            << benchmark_case
+                .gpu_wall_speedup_vs_cpu
+            << "x"
+
+            << std::setw(10)
+            << (
+                benchmark_case
+                    .gpu_faster_at_p50
+                    ? "GPU"
+                    : "CPU"
+            )
+
+            << '\n';
+    }
 
     std::cout
-        << "Palabras bitset             : "
-        << result.bitset_word_count
-        << '\n';
+        << "\n[Exactitud]\n";
 
-    std::cout
-        << "Bitset                      : "
-        << std::fixed
-        << std::setprecision(2)
-        << bytes_to_kib(
-            result.bitset_bytes
-        )
-        << " KiB\n";
+    for (
+        auto const& benchmark_case :
+        result.cases
+    ) {
 
-    std::cout
-        << "Seleccionados CPU           : "
-        << result.cpu_selected_count
-        << '\n';
-
-    std::cout
-        << "Seleccionados GPU           : "
-        << result.gpu_selected_count
-        << '\n';
-
-    std::cout
-        << "Selectividad observada      : "
-        << std::fixed
-        << std::setprecision(6)
-        << (
-            result.observed_selectivity *
-            100.0
-        )
-        << " %\n";
-
-    std::cout
-        << "Diferencias predicate/bitset: "
-        << result.predicate_bit_mismatch_count
-        << '\n';
-
-    std::cout
-        << "Predicate exacto            : "
-        << yes_no(
-            result.predicate_exact_match
-        )
-        << "\n\n";
-
-    std::cout
-        << "[RACORN - Predicate CPU]\n";
-
-    std::cout
-        << "Recall@"
-        << result.k
-        << " medio             : "
-        << std::fixed
-        << std::setprecision(4)
-        << result.cpu_mean_recall_at_k
-        << '\n';
-
-    std::cout
-        << "Distancias medias           : "
-        << std::fixed
-        << std::setprecision(4)
-        << result.cpu_mean_computed_distances
-        << '\n';
-
-    std::cout
-        << "Visitados medios            : "
-        << result.cpu_mean_visited_members
-        << '\n';
-
-    std::cout
-        << "Predicados medios           : "
-        << result.cpu_mean_predicate_evaluations
-        << '\n';
-
-    std::cout
-        << "Fallback medio              : "
-        << result.cpu_mean_fallback_count
-        << '\n';
-
-    std::cout
-        << "Filtro valido               : "
-        << yes_no(
-            result.cpu_results_filter_valid
-        )
-        << "\n\n";
-
-    std::cout
-        << "[RACORN - GPU Bitset Shared]\n";
-
-    std::cout
-        << "Recall@"
-        << result.k
-        << " medio             : "
-        << std::fixed
-        << std::setprecision(4)
-        << result.gpu_bitset_mean_recall_at_k
-        << '\n';
-
-    std::cout
-        << "Distancias medias           : "
-        << std::fixed
-        << std::setprecision(4)
-        << result.gpu_mean_computed_distances
-        << '\n';
-
-    std::cout
-        << "Visitados medios            : "
-        << result.gpu_mean_visited_members
-        << '\n';
-
-    std::cout
-        << "Predicados medios           : "
-        << result.gpu_mean_predicate_evaluations
-        << '\n';
-
-    std::cout
-        << "Fallback medio              : "
-        << result.gpu_mean_fallback_count
-        << '\n';
-
-    std::cout
-        << "Filtro valido               : "
-        << yes_no(
-            result.gpu_results_filter_valid
-        )
-        << "\n\n";
-
-    std::cout
-        << "[Equivalencia de navegacion]\n";
-
-    std::cout
-        << "Ground truth completo       : "
-        << yes_no(
-            result.exact_ground_truth_complete
-        )
-        << '\n';
-
-    std::cout
-        << "Top-k diferentes           : "
-        << result.topk_mismatch_queries
-        << " queries\n";
-
-    std::cout
-        << "Recall diferente           : "
-        << result.recall_mismatch_queries
-        << " queries\n";
-
-    std::cout
-        << "Distancias diferentes      : "
-        << result
-            .computed_distances_mismatch_queries
-        << " queries\n";
-
-    std::cout
-        << "Visitados diferentes       : "
-        << result
-            .visited_members_mismatch_queries
-        << " queries\n";
-
-    std::cout
-        << "Pred-evals diferentes      : "
-        << result
-            .predicate_evaluations_mismatch_queries
-        << " queries\n";
-
-    std::cout
-        << "Fallback diferente         : "
-        << result
-            .fallback_count_mismatch_queries
-        << " queries\n";
-
-    std::cout
-        << "Semantica identica         : "
-        << yes_no(
-            result.navigation_semantics_identical
-        )
-        << "\n\n";
+        std::cout
+            << benchmark_case.predicate_name
+            << " N="
+            << benchmark_case.element_count
+            << " -> selected="
+            << benchmark_case.selected_count
+            << ", mismatches="
+            << benchmark_case.mismatch_word_count
+            << ", exact="
+            << yes_no(
+                benchmark_case.exact_match
+            )
+            << '\n';
+    }
 
     if (
         !result.metal_error.empty()
     ) {
 
         std::cout
-            << "[Error Metal]\n"
+            << "\n[Error Metal]\n"
             << result.metal_error
-            << "\n\n";
+            << '\n';
     }
 
     std::cout
-        << "[Invariantes]\n";
-
-    std::cout
-        << "RACORN modificado           : "
+        << "\n[Invariantes]\n"
+        << "RACORN modificado        : NO\n"
+        << "RACORN ejecutado         : NO\n"
+        << "Navegacion GPU           : NO\n"
+        << "Predicate GPU            : SI\n"
+        << "Bitset GPU               : SI\n"
+        << "Atomics                  : NO\n"
+        << "Copia explicita a VRAM   : NO\n"
+        << "Casos exactos            : "
         << yes_no(
-            result.racorn_modified
+            result.all_cases_exact
         )
-        << '\n';
-
-    std::cout
-        << "Navegacion RACORN           : CPU\n";
-
-    std::cout
-        << "Evaluacion metadata masiva  : GPU\n";
-
-    std::cout
-        << "Bitset consumido por        : CPU\n";
-
-    std::cout
-        << "Navegacion GPU              : NO\n";
-
-    std::cout
-        << "Heaps GPU                   : NO\n";
-
-    std::cout
-        << "Bridges GPU                 : NO\n";
-
-    std::cout
-        << "Copia explicita a VRAM      : NO\n\n";
+        << "\n\n";
 
     if (
         !result.valid
     ) {
 
         std::cerr
-            << "[G-UMA4] FAIL\n";
+            << "[G-UMA5A] FAIL\n";
 
         return 1;
     }
 
     std::cout
-        << "[G-UMA4] PASS\n";
+        << "[G-UMA5A] PASS\n";
 
     return 0;
 }
