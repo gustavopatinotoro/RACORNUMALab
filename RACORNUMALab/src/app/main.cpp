@@ -3,24 +3,18 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar el Gate final de la rama Metal-predicate:
+//  Ejecutar G-REP0 — Repeated Predicate Sanity Baseline.
 //
-//      G-DATA3B — SIFT UMA Pipeline.
+//  Comparación:
+//      RACORN-Cached
+//      Exact-Materialized
 //
-//  Resultado posible:
-//
-//      CONTINUE_METAL
-//
-//  o:
-//
-//      STOP_METAL_PREDICATE
-//
-//  Un STOP no implica FAIL experimental.
+//  No existe overlay persistente todavía.
 //
 
 #include "core/BuildInfo.hpp"
+#include "core/RepeatedPredicateBaseline.hpp"
 #include "integration/RacornProbe.hpp"
-#include "platform/apple/SiftUmaPipelineBenchmark.hpp"
 #include "platform/apple/SystemInfo.hpp"
 
 #include <cstdlib>
@@ -67,15 +61,17 @@ std::filesystem::path resolve_data_directory(
             ) {
 
                 throw std::runtime_error(
-                    "--data-dir requiere ruta."
+                    "--data-dir requiere una ruta."
                 );
             }
 
             return
-                argv[
-                    index +
-                    1
-                ];
+                std::filesystem::path(
+                    argv[
+                        index +
+                            1
+                    ]
+                );
         }
     }
 
@@ -88,46 +84,15 @@ std::filesystem::path resolve_data_directory(
         value[0] != '\0'
     ) {
 
-        return value;
+        return
+            std::filesystem::path(
+                value
+            );
     }
 
     throw std::runtime_error(
         "Especifique --data-dir."
     );
-}
-
-void print_stats(
-    char const* name,
-    racorn_uma::platform::apple::
-        PipelineLatencyStats const& stats
-) {
-
-    std::cout
-        << name
-        << '\n'
-        << "  batch p50/p95/p99      : "
-        << std::fixed
-        << std::setprecision(3)
-        << stats.batch_p50_ms
-        << " / "
-        << stats.batch_p95_ms
-        << " / "
-        << stats.batch_p99_ms
-        << " ms\n"
-        << "  exposed wait p50/p95   : "
-        << stats.exposed_wait_p50_ms
-        << " / "
-        << stats.exposed_wait_p95_ms
-        << " ms\n"
-        << "  prepare work p50/p95   : "
-        << stats.prepare_work_p50_ms
-        << " / "
-        << stats.prepare_work_p95_ms
-        << " ms\n"
-        << "  QPS p50                : "
-        << std::setprecision(2)
-        << stats.qps_p50
-        << "\n";
 }
 
 } // namespace
@@ -140,11 +105,11 @@ int main(
     using racorn_uma::core::
         BuildInfo;
 
+    using racorn_uma::core::
+        RepeatedPredicateBaseline;
+
     using racorn_uma::integration::
         RacornProbe;
-
-    using racorn_uma::platform::apple::
-        SiftUmaPipelineBenchmark;
 
     using racorn_uma::platform::apple::
         SystemInfo;
@@ -158,14 +123,14 @@ int main(
             );
 
         const auto result =
-            SiftUmaPipelineBenchmark::run(
+            RepeatedPredicateBaseline::run(
                 data_directory
             );
 
         std::cout
             << "\n========================================\n"
             << " RACORNUMALab\n"
-            << " Gate G-DATA3B - SIFT UMA Pipeline\n"
+            << " Gate G-REP0 - Repeated Predicate Baseline\n"
             << "========================================\n\n";
 
         std::cout
@@ -196,91 +161,77 @@ int main(
             << "\n\n";
 
         std::cout
-            << "[Configuracion]\n"
+            << "[Dataset]\n"
+            << "Dataset                     : SIFT1M\n"
+            << "Subset                      : train[0:100000]\n"
             << "N                           : "
             << result.vector_count
             << '\n'
             << "D                           : "
             << result.dimensions
             << '\n'
-            << "Queries/batch               : "
+            << "Queries                     : "
             << result.query_count
-            << '\n'
-            << "M                           : "
-            << result.connectivity
-            << '\n'
-            << "efConstruction              : "
-            << result.ef_construction
-            << '\n'
-            << "efSearch                    : "
-            << result.ef_search
             << '\n'
             << "k                           : "
             << result.k
+            << "\n\n";
+
+        std::cout
+            << "[Predicado repetido]\n"
+            << "tenant                      : "
+            << result.tenant_required
             << '\n'
-            << "BR                          : "
+            << "year                        : >= 2022\n"
+            << "language                    : >= "
+            << result.language_min
+            << '\n'
+            << "category                    : {3,7,9}\n"
+            << "security                    : <= 2\n"
+            << "Elegibles                   : "
+            << result.eligible_count
+            << '\n'
+            << "Selectividad                : "
             << std::fixed
-            << std::setprecision(2)
-            << result.bridge_budget_ratio
-            << '\n'
-            << "two_hop_threshold           : "
-            << result.two_hop_threshold
-            << '\n'
-            << "Exact fallback              : NO\n"
-            << "Warmup batches              : "
-            << result.warmup_batches
-            << '\n'
-            << "Measured batches            : "
-            << result.measured_batches
-            << "\n\n";
+            << std::setprecision(4)
+            << (
+                result.selectivity *
+                100.0
+            )
+            << "%\n\n";
 
         std::cout
-            << "[Metal]\n"
-            << "Metal disponible            : "
-            << yes_no(
-                result.metal_available
-            )
-            << '\n'
-            << "Dispositivo                 : "
-            << result.device_name
-            << '\n'
-            << "Memoria unificada           : "
-            << yes_no(
-                result.unified_memory
-            )
-            << '\n'
-            << "Kernel                      : "
-            << result.kernel_name
-            << '\n'
-            << "Threads/group               : "
-            << result.threads_per_threadgroup
-            << "\n\n";
+            << "[Representaciones persistidas]\n"
+            << "Bitset RACORN               : "
+            << result.bitset_logical_bytes
+            << " bytes\n"
+            << "Lista IDs exact logical     : "
+            << result.eligible_logical_bytes
+            << " bytes\n"
+            << "Lista IDs exact allocated   : "
+            << result.eligible_allocated_bytes
+            << " bytes\n\n";
 
         std::cout
-            << "[Semantica]\n"
-            << "Bitset mismatches           : "
-            << result.bitset_word_mismatches
+            << "[Materializacion one-shot]\n"
+            << "Muestras                    : "
+            << result.materialization_samples
             << '\n'
-            << "CPU top-k mismatches        : "
-            << result.cpu_topk_mismatches
-            << '\n'
-            << "CPU counter mismatches      : "
-            << result.cpu_counter_mismatches
-            << '\n'
-            << "GPU top-k mismatches        : "
-            << result.gpu_topk_mismatches
-            << '\n'
-            << "GPU counter mismatches      : "
-            << result.gpu_counter_mismatches
-            << '\n'
-            << "Identidad semantica         : "
-            << yes_no(
-                result.semantic_identity
-            )
-            << "\n\n";
+            << "RACORN bitset mean/p50      : "
+            << std::fixed
+            << std::setprecision(4)
+            << result.racorn_materialization_mean_ms
+            << " / "
+            << result.racorn_materialization_p50_ms
+            << " ms\n"
+            << "Exact IDs mean/p50          : "
+            << result.exact_materialization_mean_ms
+            << " / "
+            << result.exact_materialization_p50_ms
+            << " ms\n\n";
 
         std::cout
-            << "[Calidad - 256 queries]\n"
+            << "[Calidad RACORN]\n"
             << "Mean Recall@10              : "
             << std::fixed
             << std::setprecision(4)
@@ -302,108 +253,177 @@ int main(
             << "\n\n";
 
         std::cout
-            << "[Pipeline]\n";
-
-        print_stats(
-            "CPU-Lazy",
-            result.cpu_lazy
-        );
-
-        std::cout
-            << '\n';
-
-        print_stats(
-            "CPU-Bitset-Pipeline",
-            result.cpu_pipeline
-        );
-
-        std::cout
-            << '\n';
-
-        print_stats(
-            "GPU-Bitset-Pipeline",
-            result.gpu_pipeline
-        );
+            << "[Trabajo por query]\n"
+            << "RACORN distances            : "
+            << result.mean_racorn_computed_distances
+            << '\n'
+            << "RACORN visited              : "
+            << result.mean_racorn_visited_members
+            << '\n'
+            << "RACORN predicate evals      : "
+            << result.mean_racorn_predicate_evaluations
+            << '\n'
+            << "RACORN fallback             : "
+            << result.mean_racorn_fallback_count
+            << '\n'
+            << "Exact distances             : "
+            << result.exact_distance_evaluations_per_query
+            << "\n\n";
 
         std::cout
-            << "\n[Speedup]\n"
-            << "CPU-Pipeline / Lazy         : "
+            << "[Latencia por query]\n"
+            << "RACORN-Cached\n"
+            << "  mean/p50/p95/p99          : "
+            << result.racorn.mean_ms
+            << " / "
+            << result.racorn.p50_ms
+            << " / "
+            << result.racorn.p95_ms
+            << " / "
+            << result.racorn.p99_ms
+            << " ms\n"
+            << "  QPS mean                  : "
+            << std::setprecision(2)
+            << result.racorn.qps_from_mean
+            << "\n\n";
+
+        std::cout
+            << "Exact-Materialized\n"
+            << "  mean/p50/p95/p99          : "
+            << std::setprecision(4)
+            << result.exact.mean_ms
+            << " / "
+            << result.exact.p50_ms
+            << " / "
+            << result.exact.p95_ms
+            << " / "
+            << result.exact.p99_ms
+            << " ms\n"
+            << "  QPS mean                  : "
+            << std::setprecision(2)
+            << result.exact.qps_from_mean
+            << "\n\n";
+
+        std::cout
+            << "[Comparacion]\n"
+            << "Exact speedup vs RACORN     : "
             << std::fixed
             << std::setprecision(3)
-            << result.cpu_speedup_vs_lazy
+            << result.exact_speedup_vs_racorn
             << "x\n"
-            << "GPU-Pipeline / Lazy         : "
-            << result.gpu_speedup_vs_lazy
-            << "x\n"
-            << "GPU-Pipeline / CPU-Pipeline : "
-            << result.gpu_speedup_vs_cpu
-            << "x\n"
-            << "GPU p95 / CPU p95           : "
-            << result.gpu_p95_ratio_vs_cpu
-            << "x\n\n";
+            << "Exact query mas rapido      : "
+            << yes_no(
+                result.exact_query_faster
+            )
+            << '\n'
+            << "Exact build mas barato      : "
+            << yes_no(
+                result.exact_build_cheaper
+            )
+            << '\n';
+
+        if (
+            result.exact_break_even_exists
+        ) {
+
+            std::cout
+                << "Break-even Exact R*         : "
+                << std::setprecision(3)
+                << result.exact_break_even_repetitions
+                << " queries\n";
+
+        } else {
+
+            std::cout
+                << "Break-even Exact R*         : NO EXISTE\n";
+        }
 
         std::cout
-            << "[Criterio de corte predefinido]\n"
-            << "GPU p50 >= 1.02x CPU        : "
+            << "\n[Coste acumulado estimado]\n"
+            << "R       RACORN(ms)      Exact(ms)       Winner\n";
+
+        for (
+            auto const& point :
+            result.cumulative_costs
+        ) {
+
+            std::cout
+                << std::left
+                << std::setw(8)
+                << point.repetitions
+
+                << std::right
+                << std::fixed
+                << std::setprecision(3)
+
+                << std::setw(15)
+                << point.racorn_cumulative_ms
+
+                << std::setw(15)
+                << point.exact_cumulative_ms
+
+                << "       "
+                << point.winner
+                << '\n';
+        }
+
+        std::cout
+            << "\n[Validacion]\n"
+            << "Representation mismatches   : "
+            << result.representation_mismatches
+            << '\n'
+            << "Exact/reference mismatches  : "
+            << result.exact_reference_mismatch_queries
+            << '\n'
+            << "RACORN filter-invalid       : "
+            << result.invalid_racorn_result_queries
+            << '\n'
+            << "Ground truth completo       : "
             << yes_no(
-                result.gpu_p50_margin_pass
+                result.ground_truth_complete
             )
             << '\n'
-            << "GPU p95 <= 1.02x CPU        : "
+            << "Exact implementation valida : "
             << yes_no(
-                result.gpu_p95_guard_pass
+                result.exact_implementation_valid
             )
             << '\n'
-            << "Metal merece continuar      : "
+            << "Materializacion valida      : "
             << yes_no(
-                result.gpu_pipeline_worthwhile
+                result.predicate_materialization_valid
+            )
+            << '\n'
+            << "RACORN filter valido        : "
+            << yes_no(
+                result.racorn_results_filter_valid
             )
             << "\n\n";
 
         std::cout
-            << "========================================\n"
-            << " DECISION: "
-            << result.decision
-            << '\n'
-            << "========================================\n\n";
-
-        std::cout
             << "[Invariantes]\n"
+            << "Predicado por query         : NO\n"
+            << "Bitset recalculado/query    : NO\n"
+            << "IDs recalculados/query      : NO\n"
+            << "HNSW dentro del timing      : NO\n"
+            << "Metal                       : NO\n"
             << "RACORN modificado           : "
             << yes_no(
                 result.racorn_modified
             )
-            << '\n'
-            << "Navegacion RACORN           : CPU\n"
-            << "CPU worker persistente      : SI\n"
-            << "GPU preparacion asincrona   : SI\n"
-            << "Double buffering CPU        : SI\n"
-            << "Double buffering GPU        : SI\n"
-            << "Navegacion GPU              : NO\n"
-            << "Exact fallback              : NO\n\n";
-
-        if (
-            !result.metal_error.empty()
-        ) {
-
-            std::cout
-                << "[Metal error]\n"
-                << result.metal_error
-                << "\n\n";
-        }
+            << "\n\n";
 
         if (
             !result.valid
         ) {
 
             std::cerr
-                << "[G-DATA3B] FAIL\n";
+                << "[G-REP0] FAIL\n";
 
             return 1;
         }
 
         std::cout
-            << "[G-DATA3B] PASS\n";
+            << "[G-REP0] PASS\n";
 
         return 0;
 
@@ -412,7 +432,7 @@ int main(
     ) {
 
         std::cerr
-            << "\n[G-DATA3B] FAIL: "
+            << "\n[G-REP0] FAIL: "
             << error.what()
             << '\n';
 
