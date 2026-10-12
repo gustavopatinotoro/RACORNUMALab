@@ -3,34 +3,71 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar sobre un único índice HNSW las rutas:
+//  Ejecutar un experimento controlado de búsqueda vectorial filtrada
+//  comparando tres rutas del mismo índice:
 //
-//      1. HNSW filtrado
-//      2. ACORN-1
-//      3. RACORN-1
+//      1. HNSW con in-filtering.
+//      2. ACORN-1.
+//      3. RACORN-1.
 //
 //  Gate:
-//  G4A — Activación funcional de búsqueda filtrada.
+//  G4B — Barrido controlado de selectividad.
 //
 //  Dataset:
 //  - Sintético.
 //  - Determinista.
-//  - Distribución pseudoaleatoria.
-//  - 20.000 vectores de 32 dimensiones.
+//  - 20.000 vectores.
+//  - 32 dimensiones.
+//  - Valores pseudoaleatorios reproducibles.
+//
+//  Consultas:
+//  - 32.
+//  - Independientes del dataset.
+//  - Pseudoaleatorias y reproducibles.
 //
 //  Filtro:
-//      key % 200 == 0
+//      (key % modulus) < threshold
 //
-//  Selectividad nominal:
-//      1 / 200 = 0.005 = 0.5 %
+//  Ejemplos con threshold = 1:
+//
+//      modulus = 10    -> 10.00 %
+//      modulus = 20    ->  5.00 %
+//      modulus = 50    ->  2.00 %
+//      modulus = 100   ->  1.00 %
+//      modulus = 200   ->  0.50 %
+//      modulus = 400   ->  0.25 %
+//      modulus = 1000  ->  0.10 %
 //
 //  Ground truth:
-//  Exact search filtrado del propio index_gt.
+//  Búsqueda exacta filtrada del propio index_gt.
 //
-//  Importante:
-//  Este Gate no pretende establecer todavía rendimiento definitivo.
-//  Su finalidad es comprobar que las tres rutas algorítmicas funcionan,
-//  respetan el predicado y producen telemetría diferenciable.
+//  Condiciones RACORN:
+//  - two_hop_threshold = 0.30.
+//  - bridge_budget_ratio = 1.0.
+//  - stride sampling activado.
+//  - 3-hop desactivado.
+//  - exact fallback desactivado.
+//
+//  Interpretación:
+//  Este Gate pretende localizar empíricamente:
+//
+//      - La región donde ACORN comienza a perder conectividad.
+//      - La región donde RACORN activa Adaptive Search Fallback.
+//      - La capacidad de RACORN para recuperar recall.
+//      - El coste de dicha recuperación.
+//
+//  Invariantes:
+//  - Las tres rutas usan exactamente el mismo índice.
+//  - Las tres rutas usan exactamente las mismas consultas.
+//  - Las tres rutas usan exactamente el mismo predicado.
+//  - No se reconstruye el índice entre modos.
+//  - Un único hilo.
+//
+//  Seguridad:
+//  - Sin red.
+//  - Sin archivos.
+//  - Sin estado externo.
+//  - Sin modificaciones de código vendorizado.
 //
 
 #include "filtered/FilteredSearchBaseline.hpp"
@@ -63,11 +100,14 @@ constexpr std::size_t kEfSearch = 200;
 constexpr std::size_t kNeighbors = 10;
 constexpr std::size_t kQueryCount = 32;
 
-constexpr std::size_t kFilterModulus = 200;
-constexpr std::size_t kFilterThreshold = 1;
-
 constexpr double kTwoHopThreshold = 0.30;
 constexpr double kBridgeBudgetRatio = 1.0;
+
+constexpr std::uint64_t kBaseSeed =
+    0x13579BDF2468ACE0ULL;
+
+constexpr std::uint64_t kQuerySeed =
+    0xCAFEBABE12345678ULL;
 
 using VectorKey = std::size_t;
 using Slot = std::size_t;
@@ -76,9 +116,10 @@ using Index =
     index_gt<float, VectorKey, Slot>;
 
 //
-// PRNG determinista SplitMix64.
+// Generador determinista SplitMix64.
 //
-// No se utiliza std::random_device para garantizar reproducibilidad.
+// No se utiliza std::random_device. El experimento debe producir
+// exactamente los mismos datos en ejecuciones sucesivas.
 //
 
 std::uint64_t splitmix64(
@@ -126,6 +167,10 @@ float random_signed_float(
         );
 }
 
+//
+// Almacén de vectores base.
+//
+
 class VectorStore final {
 
 public:
@@ -171,6 +216,10 @@ private:
     std::vector<float> data_;
 };
 
+//
+// Almacén independiente de consultas.
+//
+
 class QueryStore final {
 
 public:
@@ -215,6 +264,13 @@ private:
     std::size_t dimensions_{};
     std::vector<float> data_;
 };
+
+//
+// Métrica L2² requerida por index_gt.
+//
+// La raíz cuadrada no es necesaria porque L2² conserva el orden
+// relativo de las distancias.
+//
 
 struct L2Metric final {
 
@@ -303,6 +359,11 @@ struct L2Metric final {
     }
 };
 
+//
+// Wrapper RAII para respetar el alineamiento utilizado por
+// la implementación oficial RACORN/USEARCH.
+//
+
 template <typename IndexType>
 class AlignedIndex final {
 
@@ -358,7 +419,17 @@ private:
     IndexType* pointer_{nullptr};
 };
 
+//
+// Predicado de metadata.
+//
+// La parametrización permite ejecutar diferentes selectividades
+// sin modificar ni recompilar la lógica del experimento.
+//
+
 struct MetadataPredicate final {
+
+    std::size_t modulus{};
+    std::size_t threshold{};
 
     template <typename MemberLike>
     bool operator()(
@@ -368,24 +439,28 @@ struct MetadataPredicate final {
         return
             (
                 get_key(member) %
-                kFilterModulus
+                modulus
             ) <
-            kFilterThreshold;
+            threshold;
     }
 
     [[nodiscard]]
-    static bool accepts_key(
+    bool accepts_key(
         std::size_t key
-    ) noexcept {
+    ) const noexcept {
 
         return
             (
                 key %
-                kFilterModulus
+                modulus
             ) <
-            kFilterThreshold;
+            threshold;
     }
 };
+
+//
+// Convierte un search_result_t en una lista simple de keys.
+//
 
 template <typename SearchResult>
 std::vector<std::size_t>
@@ -414,6 +489,12 @@ extract_keys(
 
     return keys;
 }
+
+//
+// Recall@k basado en pertenencia al conjunto ground truth.
+//
+// El orden relativo dentro del top-k no altera Recall@k.
+//
 
 double recall_at_k(
     std::vector<std::size_t> const& approximate,
@@ -449,8 +530,14 @@ double recall_at_k(
         );
 }
 
+//
+// Verifica el contrato de búsqueda filtrada:
+// ningún resultado retornado puede violar el predicado.
+//
+
 bool filter_is_valid(
-    std::vector<std::size_t> const& keys
+    std::vector<std::size_t> const& keys,
+    MetadataPredicate const& predicate
 ) noexcept {
 
     for (
@@ -459,8 +546,9 @@ bool filter_is_valid(
     ) {
 
         if (
-            !MetadataPredicate::
-                accepts_key(key)
+            !predicate.accepts_key(
+                key
+            )
         ) {
 
             return false;
@@ -475,6 +563,23 @@ enum class SearchMode {
     acorn,
     racorn
 };
+
+//
+// Construye la configuración de búsqueda para cada algoritmo.
+//
+// HNSW:
+//     two_hop_threshold < 0.
+//
+// ACORN-1:
+//     two_hop_threshold >= 0,
+//     racorn = false.
+//
+// RACORN-1:
+//     two_hop_threshold >= 0,
+//     racorn = true.
+//
+// 3-hop y RACORN-1+ permanecen desactivados.
+//
 
 index_search_config_t
 make_search_config(
@@ -537,6 +642,10 @@ make_search_config(
     return config;
 }
 
+//
+// Acumulador interno de métricas.
+//
+
 struct Accumulator final {
 
     double recall_sum{};
@@ -548,17 +657,25 @@ struct Accumulator final {
 
     double fallback_selectivity_sum{};
 
-    std::size_t fallback_selectivity_samples{};
-    std::size_t queries_with_fallback{};
+    std::size_t
+        fallback_selectivity_samples{};
+
+    std::size_t
+        queries_with_fallback{};
 
     bool filter_valid = true;
 };
+
+//
+// Acumula métricas de una única consulta.
+//
 
 void accumulate(
     Accumulator& accumulator,
     std::vector<std::size_t> const& keys,
     std::vector<std::size_t> const& ground_truth,
-    Index::search_result_t const& result
+    Index::search_result_t const& result,
+    MetadataPredicate const& predicate
 ) {
 
     accumulator.recall_sum +=
@@ -593,10 +710,12 @@ void accumulate(
         );
 
     if (
-        result.fallback_count > 0
+        result.fallback_count >
+        0
     ) {
 
-        ++accumulator.queries_with_fallback;
+        ++accumulator
+            .queries_with_fallback;
 
         if (
             std::isfinite(
@@ -604,8 +723,10 @@ void accumulate(
             )
         ) {
 
-            accumulator.fallback_selectivity_sum +=
-                result.fallback_selectivity;
+            accumulator
+                .fallback_selectivity_sum +=
+                result
+                    .fallback_selectivity;
 
             ++accumulator
                 .fallback_selectivity_samples;
@@ -614,8 +735,15 @@ void accumulate(
 
     accumulator.filter_valid =
         accumulator.filter_valid &&
-        filter_is_valid(keys);
+        filter_is_valid(
+            keys,
+            predicate
+        );
 }
+
+//
+// Convierte el acumulador a estadísticas medias.
+//
 
 FilteredModeStats finish_stats(
     char const* name,
@@ -641,23 +769,28 @@ FilteredModeStats finish_stats(
         query_count;
 
     stats.mean_computed_distances =
-        accumulator.computed_distances_sum /
+        accumulator
+            .computed_distances_sum /
         query_count;
 
     stats.mean_visited_members =
-        accumulator.visited_members_sum /
+        accumulator
+            .visited_members_sum /
         query_count;
 
     stats.mean_predicate_evaluations =
-        accumulator.predicate_evaluations_sum /
+        accumulator
+            .predicate_evaluations_sum /
         query_count;
 
     stats.mean_fallback_count =
-        accumulator.fallback_count_sum /
+        accumulator
+            .fallback_count_sum /
         query_count;
 
     stats.queries_with_fallback =
-        accumulator.queries_with_fallback;
+        accumulator
+            .queries_with_fallback;
 
     if (
         accumulator
@@ -689,18 +822,44 @@ FilteredModeStats finish_stats(
 } // namespace
 
 FilteredSearchResult
-FilteredSearchBaseline::run() {
+FilteredSearchBaseline::run(
+    std::size_t filter_modulus,
+    std::size_t filter_threshold
+) {
+
+    FilteredSearchResult output;
+
+    //
+    // Validación defensiva.
+    //
+
+    if (
+        filter_modulus == 0 ||
+        filter_threshold == 0 ||
+        filter_threshold >
+            filter_modulus
+    ) {
+
+        output.passed =
+            false;
+
+        return output;
+    }
+
+    //
+    // Dataset reproducible.
+    //
 
     VectorStore base(
         kVectorCount,
         kDimensions,
-        0x13579BDF2468ACE0ULL
+        kBaseSeed
     );
 
     QueryStore queries(
         kQueryCount,
         kDimensions,
-        0xCAFEBABE12345678ULL
+        kQuerySeed
     );
 
     L2Metric metric{
@@ -708,13 +867,20 @@ FilteredSearchBaseline::run() {
         .dimensions = kDimensions
     };
 
-    index_config_t index_configuration(
-        kConnectivity
-    );
+    //
+    // Construcción del único índice utilizado por todo
+    // el experimento.
+    //
 
-    AlignedIndex<Index> aligned_index(
-        index_configuration
-    );
+    index_config_t
+        index_configuration(
+            kConnectivity
+        );
+
+    AlignedIndex<Index>
+        aligned_index(
+            index_configuration
+        );
 
     Index& index =
         aligned_index.get();
@@ -726,7 +892,8 @@ FilteredSearchBaseline::run() {
         )
     );
 
-    index_update_config_t update_configuration;
+    index_update_config_t
+        update_configuration;
 
     update_configuration.expansion =
         kEfConstruction;
@@ -748,7 +915,13 @@ FilteredSearchBaseline::run() {
         );
     }
 
-    MetadataPredicate predicate;
+    const MetadataPredicate predicate{
+        .modulus =
+            filter_modulus,
+
+        .threshold =
+            filter_threshold
+    };
 
     Accumulator hnsw_accumulator;
     Accumulator acorn_accumulator;
@@ -756,6 +929,11 @@ FilteredSearchBaseline::run() {
 
     bool exact_complete =
         true;
+
+    //
+    // Todas las rutas se evalúan consulta por consulta
+    // contra exactamente el mismo ground truth.
+    //
 
     for (
         std::size_t query_index = 0;
@@ -769,10 +947,11 @@ FilteredSearchBaseline::run() {
             );
 
         //
-        // Exact filtered ground truth.
+        // Ground truth exacto filtrado.
         //
 
-        index_search_config_t exact_config;
+        index_search_config_t
+            exact_config;
 
         exact_config.exact =
             true;
@@ -798,7 +977,8 @@ FilteredSearchBaseline::run() {
             exact_keys.size() !=
                 kNeighbors ||
             !filter_is_valid(
-                exact_keys
+                exact_keys,
+                predicate
             )
         ) {
 
@@ -807,7 +987,7 @@ FilteredSearchBaseline::run() {
         }
 
         //
-        // HNSW in-filtering.
+        // HNSW filtrado.
         //
 
         auto hnsw_config =
@@ -833,7 +1013,8 @@ FilteredSearchBaseline::run() {
             hnsw_accumulator,
             hnsw_keys,
             exact_keys,
-            hnsw_result
+            hnsw_result,
+            predicate
         );
 
         //
@@ -863,7 +1044,8 @@ FilteredSearchBaseline::run() {
             acorn_accumulator,
             acorn_keys,
             exact_keys,
-            acorn_result
+            acorn_result,
+            predicate
         );
 
         //
@@ -893,9 +1075,14 @@ FilteredSearchBaseline::run() {
             racorn_accumulator,
             racorn_keys,
             exact_keys,
-            racorn_result
+            racorn_result,
+            predicate
         );
     }
+
+    //
+    // Selectividad observada real.
+    //
 
     std::size_t eligible_count =
         0;
@@ -907,15 +1094,18 @@ FilteredSearchBaseline::run() {
     ) {
 
         if (
-            MetadataPredicate::
-                accepts_key(key)
+            predicate.accepts_key(
+                key
+            )
         ) {
 
             ++eligible_count;
         }
     }
 
-    FilteredSearchResult output;
+    //
+    // Resultado final.
+    //
 
     output.vector_count =
         index.size();
@@ -938,15 +1128,21 @@ FilteredSearchBaseline::run() {
     output.query_count =
         kQueryCount;
 
+    output.filter_modulus =
+        filter_modulus;
+
+    output.filter_threshold =
+        filter_threshold;
+
     output.eligible_count =
         eligible_count;
 
     output.nominal_selectivity =
         static_cast<double>(
-            kFilterThreshold
+            filter_threshold
         ) /
         static_cast<double>(
-            kFilterModulus
+            filter_modulus
         );
 
     output.observed_selectivity =
@@ -991,14 +1187,21 @@ FilteredSearchBaseline::run() {
         output.racorn
             .all_results_satisfy_filter;
 
+    //
+    // En G4B no exigimos fallback RACORN para PASS.
+    //
+    // Esa condición sería metodológicamente incorrecta porque
+    // precisamente queremos descubrir en qué selectividad empieza
+    // a activarse.
+    //
+
     output.passed =
         output.vector_count ==
             kVectorCount &&
         output.eligible_count >=
             kNeighbors &&
         output.exact_ground_truth_complete &&
-        filters_valid &&
-        output.racorn_fallback_observed;
+        filters_valid;
 
     return output;
 }

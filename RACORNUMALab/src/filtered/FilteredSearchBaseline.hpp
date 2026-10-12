@@ -3,34 +3,58 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Definir el primer experimento comparativo de búsqueda vectorial
-//  filtrada entre HNSW, ACORN-1 y RACORN-1.
+//  Definir el experimento reproducible de búsqueda vectorial filtrada
+//  utilizado para comparar HNSW, ACORN-1 y RACORN-1 sobre exactamente
+//  el mismo índice, consultas y predicado.
 //
 //  Gate:
-//  G4A — Activación funcional de búsqueda filtrada.
+//  G4B — Barrido controlado de selectividad.
 //
 //  Objetivos:
-//  - Utilizar exactamente el mismo índice HNSW para los tres modos.
-//  - Utilizar exactamente las mismas consultas.
-//  - Utilizar exactamente el mismo predicado.
-//  - Comparar cada resultado contra ground truth exacto filtrado.
-//  - Verificar que RACORN activa realmente Adaptive Search Fallback.
+//  - Parametrizar la selectividad del filtro.
+//  - Mantener constante la topología HNSW.
+//  - Comparar HNSW filtrado, ACORN-1 y RACORN-1.
+//  - Utilizar búsqueda exacta filtrada como ground truth.
+//  - Medir Recall@k.
+//  - Medir distancias calculadas.
+//  - Medir nodos visitados.
+//  - Medir evaluaciones del predicado.
+//  - Medir activación del fallback RACORN.
+//  - Verificar que todos los resultados respetan el filtro.
+//
+//  Diseño experimental:
+//  Cada configuración de selectividad debe ejecutarse en un proceso
+//  independiente. Esto evita contaminación entre experimentos y mantiene
+//  una frontera metodológica clara.
 //
 //  Invariantes:
+//  - N = 20.000.
+//  - D = 32.
+//  - M = 16.
+//  - efConstruction = 100.
+//  - efSearch = 200.
+//  - k = 10.
+//  - 32 consultas.
 //  - Un único hilo.
 //  - Sin Metal.
 //  - Sin 3-hop.
 //  - Sin RACORN-1+.
 //  - bridge_budget_ratio = 1.0.
-//  - Predicado determinista.
-//  - Dataset y queries reproducibles.
+//  - Stride sampling activado.
+//  - Dataset determinista.
+//  - Consultas deterministas.
+//
+//  Seguridad:
+//  - No existe entrada de red.
+//  - No se modifican archivos.
+//  - No se modifica código RACORN vendorizado.
+//  - Los parámetros externos son validados por el punto de entrada.
 //
 
 #pragma once
 
 #include <cstddef>
 #include <string>
-#include <vector>
 
 namespace racorn_uma::filtered {
 
@@ -67,6 +91,9 @@ struct FilteredSearchResult final {
     std::size_t k{};
     std::size_t query_count{};
 
+    std::size_t filter_modulus{};
+    std::size_t filter_threshold{};
+
     std::size_t eligible_count{};
 
     double nominal_selectivity{};
@@ -86,7 +113,10 @@ class FilteredSearchBaseline final {
 public:
 
     [[nodiscard]]
-    static FilteredSearchResult run();
+    static FilteredSearchResult run(
+        std::size_t filter_modulus,
+        std::size_t filter_threshold
+    );
 };
 
 } // namespace racorn_uma::filtered
