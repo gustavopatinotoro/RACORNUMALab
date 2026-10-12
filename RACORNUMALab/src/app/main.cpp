@@ -3,28 +3,24 @@
 //  RACORNUMALab
 //
 //  Propósito:
-//  Ejecutar G-UMA5B y comparar end-to-end:
+//  Ejecutar G-UMA5C y comparar throughput sostenido:
 //
 //      CPU-Lazy
-//      CPU-Bitset
-//      GPU-Bitset
+//      CPU-Bitset Serial
+//      CPU-Bitset Pipeline
+//      GPU-Bitset Pipeline
 //
-//  sobre búsquedas RACORN reales.
+//  RACORN siempre navega en CPU.
 //
 //  Gate:
-//  G-UMA5B — RACORN End-to-End CPU/GPU.
+//  G-UMA5C — Pipeline CPU/GPU.
 //
-//  Condición PASS:
-//  Las tres estrategias deben conservar exactamente la semántica
-//  RACORN antes de interpretar cualquier diferencia de rendimiento.
-//
-//  Importante:
-//  Ejecutar este Gate exclusivamente en configuración Release.
+//  Ejecutar exclusivamente en Release.
 //
 
 #include "core/BuildInfo.hpp"
 #include "integration/RacornProbe.hpp"
-#include "platform/apple/RacornEndToEndBenchmark.hpp"
+#include "platform/apple/RacornPipelineBenchmark.hpp"
 #include "platform/apple/SystemInfo.hpp"
 
 #include <iomanip>
@@ -53,18 +49,18 @@ int main() {
         RacornProbe;
 
     using racorn_uma::platform::apple::
-        RacornEndToEndBenchmark;
+        RacornPipelineBenchmark;
 
     using racorn_uma::platform::apple::
         SystemInfo;
 
     const auto result =
-        RacornEndToEndBenchmark::run();
+        RacornPipelineBenchmark::run();
 
     std::cout
-        << "========================================\n"
+        << "\n========================================\n"
         << " RACORNUMALab\n"
-        << " Gate G-UMA5B - RACORN End-to-End\n"
+        << " Gate G-UMA5C - Pipeline CPU/GPU\n"
         << "========================================\n\n";
 
     std::cout
@@ -111,8 +107,14 @@ int main() {
         << "k                           : "
         << result.k
         << '\n'
-        << "Queries                     : "
+        << "Queries/lote                : "
         << result.query_count
+        << '\n'
+        << "Warmup batches              : "
+        << result.warmup_batches
+        << '\n'
+        << "Measured batches            : "
+        << result.measured_batches
         << '\n'
         << "two_hop_threshold           : "
         << std::fixed
@@ -122,19 +124,6 @@ int main() {
         << "bridge_budget_ratio         : "
         << result.bridge_budget_ratio
         << "\n\n";
-
-    std::cout
-        << "[Benchmark]\n"
-        << "Warmup rounds               : "
-        << result.warmup_rounds
-        << '\n'
-        << "Measured rounds             : "
-        << result.measured_rounds
-        << '\n'
-        << "Orden estrategias           : ROTADO\n"
-        << "Indice dentro del timing    : NO\n"
-        << "Metadata allocation timing  : NO\n"
-        << "Pipeline creation timing    : NO\n\n";
 
     std::cout
         << "[Metal]\n"
@@ -162,16 +151,12 @@ int main() {
         << "Execution width             : "
         << result.thread_execution_width
         << '\n'
-        << "Threads/group max           : "
-        << result
-            .max_total_threads_per_threadgroup
-        << '\n'
-        << "Threads/group usados        : "
+        << "Threads/group               : "
         << result.threads_per_threadgroup
         << "\n\n";
 
     std::cout
-        << "[Latencia End-to-End p50/p95 ms]\n\n";
+        << "[Throughput - batch p50/p95 ms]\n\n";
 
     std::cout
         << std::left
@@ -179,28 +164,22 @@ int main() {
         << "N"
 
         << std::right
-        << std::setw(10)
-        << "Sel.%"
-
         << std::setw(12)
         << "Lazy50"
 
         << std::setw(12)
-        << "Lazy95"
+        << "Serial50"
 
         << std::setw(12)
-        << "CPUbit50"
+        << "CPUpipe50"
 
         << std::setw(12)
-        << "CPUbit95"
+        << "GPUpipe50"
 
         << std::setw(12)
-        << "GPUbit50"
+        << "GPUpipe95"
 
-        << std::setw(12)
-        << "GPUbit95"
-
-        << std::setw(15)
+        << std::setw(24)
         << "Winner"
 
         << '\n';
@@ -216,183 +195,184 @@ int main() {
             << item.vector_count
 
             << std::right
-            << std::setw(10)
+            << std::fixed
+            << std::setprecision(4)
+
+            << std::setw(12)
+            << item.cpu_lazy.batch_p50_ms
+
+            << std::setw(12)
+            << item
+                .cpu_bitset_serial
+                .batch_p50_ms
+
+            << std::setw(12)
+            << item
+                .cpu_bitset_pipeline
+                .batch_p50_ms
+
+            << std::setw(12)
+            << item
+                .gpu_bitset_pipeline
+                .batch_p50_ms
+
+            << std::setw(12)
+            << item
+                .gpu_bitset_pipeline
+                .batch_p95_ms
+
+            << std::setw(24)
+            << item.throughput_winner
+
+            << '\n';
+    }
+
+    std::cout
+        << "\n[Throughput p50]\n";
+
+    for (
+        auto const& item :
+        result.cases
+    ) {
+
+        std::cout
+            << "N="
+            << item.vector_count
+            << '\n'
+
+            << "  CPU-Lazy             : "
+            << std::fixed
+            << std::setprecision(2)
+            << item.cpu_lazy.qps_p50
+            << " QPS\n"
+
+            << "  CPU-Bitset Serial    : "
+            << item
+                .cpu_bitset_serial
+                .qps_p50
+            << " QPS\n"
+
+            << "  CPU-Bitset Pipeline  : "
+            << item
+                .cpu_bitset_pipeline
+                .qps_p50
+            << " QPS\n"
+
+            << "  GPU-Bitset Pipeline  : "
+            << item
+                .gpu_bitset_pipeline
+                .qps_p50
+            << " QPS\n";
+    }
+
+    std::cout
+        << "\n[Espera expuesta del pipeline p50/p95]\n";
+
+    for (
+        auto const& item :
+        result.cases
+    ) {
+
+        std::cout
+            << "N="
+            << item.vector_count
+
+            << " | CPU="
+            << std::fixed
+            << std::setprecision(4)
+            << item
+                .cpu_bitset_pipeline
+                .exposed_wait_p50_ms
+            << "/"
+            << item
+                .cpu_bitset_pipeline
+                .exposed_wait_p95_ms
+            << " ms"
+
+            << " | GPU="
+            << item
+                .gpu_bitset_pipeline
+                .exposed_wait_p50_ms
+            << "/"
+            << item
+                .gpu_bitset_pipeline
+                .exposed_wait_p95_ms
+            << " ms\n";
+    }
+
+    std::cout
+        << "\n[Speedup]\n";
+
+    for (
+        auto const& item :
+        result.cases
+    ) {
+
+        std::cout
+            << "N="
+            << item.vector_count
+
+            << " | CPU-pipeline vs serial="
+            << std::fixed
+            << std::setprecision(3)
+            << item
+                .cpu_pipeline_speedup_vs_serial
+            << "x"
+
+            << " | GPU-pipeline vs serial="
+            << item
+                .gpu_pipeline_speedup_vs_serial
+            << "x"
+
+            << " | GPU-pipeline vs lazy="
+            << item
+                .gpu_pipeline_speedup_vs_lazy
+            << "x\n";
+    }
+
+    std::cout
+        << "\n[Calidad RACORN]\n";
+
+    for (
+        auto const& item :
+        result.cases
+    ) {
+
+        std::cout
+            << "N="
+            << item.vector_count
+
+            << " | sel="
             << std::fixed
             << std::setprecision(4)
             << (
                 item.mean_selectivity *
                 100.0
             )
+            << "%"
 
-            << std::setw(12)
-            << item
-                .cpu_lazy
-                .total_p50_ms
-
-            << std::setw(12)
-            << item
-                .cpu_lazy
-                .total_p95_ms
-
-            << std::setw(12)
-            << item
-                .cpu_bitset
-                .total_p50_ms
-
-            << std::setw(12)
-            << item
-                .cpu_bitset
-                .total_p95_ms
-
-            << std::setw(12)
-            << item
-                .gpu_bitset
-                .total_p50_ms
-
-            << std::setw(12)
-            << item
-                .gpu_bitset
-                .total_p95_ms
-
-            << std::setw(15)
-            << item.p50_winner
-
-            << '\n';
-    }
-
-    std::cout
-        << "\n[Descomposicion p50 ms]\n\n";
-
-    std::cout
-        << std::left
-        << std::setw(10)
-        << "N"
-
-        << std::right
-        << std::setw(12)
-        << "CPUprep"
-
-        << std::setw(12)
-        << "CPUsearch"
-
-        << std::setw(12)
-        << "GPUprep"
-
-        << std::setw(12)
-        << "GPUdev"
-
-        << std::setw(12)
-        << "GPUsearch"
-
-        << '\n';
-
-    for (
-        auto const& item :
-        result.cases
-    ) {
-
-        std::cout
-            << std::left
-            << std::setw(10)
-            << item.vector_count
-
-            << std::right
-            << std::setw(12)
-            << std::fixed
-            << std::setprecision(4)
-            << item
-                .cpu_bitset
-                .prepare_p50_ms
-
-            << std::setw(12)
-            << item
-                .cpu_bitset
-                .search_p50_ms
-
-            << std::setw(12)
-            << item
-                .gpu_bitset
-                .prepare_p50_ms;
-
-        if (
-            item
-                .gpu_bitset
-                .gpu_device_timing_available
-        ) {
-
-            std::cout
-                << std::setw(12)
-                << item
-                    .gpu_bitset
-                    .gpu_device_p50_ms;
-
-        } else {
-
-            std::cout
-                << std::setw(12)
-                << "N/A";
-        }
-
-        std::cout
-            << std::setw(12)
-            << item
-                .gpu_bitset
-                .search_p50_ms
-
-            << '\n';
-    }
-
-    std::cout
-        << "\n[Speedup vs CPU-Lazy p50]\n";
-
-    for (
-        auto const& item :
-        result.cases
-    ) {
-
-        std::cout
-            << "N="
-            << item.vector_count
-            << " | CPU-Bitset="
-            << std::fixed
-            << std::setprecision(3)
-            << item
-                .cpu_bitset_speedup_vs_lazy
-            << "x | GPU-Bitset="
-            << item
-                .gpu_bitset_speedup_vs_lazy
-            << "x\n";
-    }
-
-    std::cout
-        << "\n[Calidad y trabajo RACORN]\n";
-
-    for (
-        auto const& item :
-        result.cases
-    ) {
-
-        std::cout
-            << "N="
-            << item.vector_count
             << " | elegibles="
             << item.selected_min
             << ".."
             << item.selected_max
+
             << " | Recall@"
             << result.k
             << "="
-            << std::fixed
-            << std::setprecision(4)
             << item.mean_recall_at_k
+
             << " | dist="
             << item.mean_computed_distances
+
             << " | visited="
             << item.mean_visited_members
+
             << " | pred="
             << item.mean_predicate_evaluations
+
             << " | fallback="
             << item.mean_fallback_count
+
             << '\n';
     }
 
@@ -409,58 +389,46 @@ int main() {
             << item.vector_count
             << '\n'
 
-            << "  Bitset word mismatches      : "
+            << "  Bitset mismatches             : "
             << item.bitset_word_mismatches
             << '\n'
 
-            << "  Predicate/bitset mismatches : "
+            << "  Predicate mismatches          : "
             << item
                 .predicate_representation_mismatches
             << '\n'
 
-            << "  Top-k mismatch queries      : "
-            << item.topk_mismatch_queries
-            << '\n'
-
-            << "  Recall mismatch queries     : "
-            << item.recall_mismatch_queries
-            << '\n'
-
-            << "  Dist mismatch queries       : "
+            << "  CPU pipeline top-k mismatch   : "
             << item
-                .computed_distances_mismatch_queries
+                .cpu_pipeline_topk_mismatch_queries
             << '\n'
 
-            << "  Visited mismatch queries    : "
+            << "  CPU pipeline counter mismatch : "
             << item
-                .visited_members_mismatch_queries
+                .cpu_pipeline_counter_mismatch_queries
             << '\n'
 
-            << "  Pred-eval mismatch queries  : "
+            << "  GPU pipeline top-k mismatch   : "
             << item
-                .predicate_evaluations_mismatch_queries
+                .gpu_pipeline_topk_mismatch_queries
             << '\n'
 
-            << "  Fallback mismatch queries   : "
+            << "  GPU pipeline counter mismatch : "
             << item
-                .fallback_count_mismatch_queries
+                .gpu_pipeline_counter_mismatch_queries
             << '\n'
 
-            << "  Ground truth completo       : "
+            << "  CPU pipeline semantica        : "
             << yes_no(
-                item.exact_ground_truth_complete
+                item
+                    .cpu_pipeline_semantics_identical
             )
             << '\n'
 
-            << "  Resultados filtro validos   : "
+            << "  GPU pipeline semantica        : "
             << yes_no(
-                item.filter_results_valid
-            )
-            << '\n'
-
-            << "  Semantica identica          : "
-            << yes_no(
-                item.navigation_semantics_identical
+                item
+                    .gpu_pipeline_semantics_identical
             )
             << "\n\n";
     }
@@ -483,13 +451,13 @@ int main() {
         )
         << '\n'
         << "Navegacion RACORN            : CPU\n"
-        << "CPU-Lazy disponible          : SI\n"
-        << "CPU-Bitset disponible        : SI\n"
-        << "GPU-Bitset disponible        : SI\n"
+        << "CPU worker persistente       : SI\n"
+        << "GPU preparacion asincrona    : SI\n"
+        << "Double buffering CPU         : SI\n"
+        << "Double buffering GPU         : SI\n"
         << "Navegacion GPU               : NO\n"
         << "Heaps GPU                    : NO\n"
         << "Bridges GPU                  : NO\n"
-        << "Copia explicita a VRAM       : NO\n"
         << "Semantica global identica    : "
         << yes_no(
             result
@@ -502,13 +470,13 @@ int main() {
     ) {
 
         std::cerr
-            << "[G-UMA5B] FAIL\n";
+            << "[G-UMA5C] FAIL\n";
 
         return 1;
     }
 
     std::cout
-        << "[G-UMA5B] PASS\n";
+        << "[G-UMA5C] PASS\n";
 
     return 0;
 }
